@@ -9,9 +9,6 @@ U-CORE-29
 U-CORE-30
 
 # --- U-COM --- 계약 최소셋: common
-U-COM-29
-U-COM-32
-U-COM-38
 
 # --- U-DS --- 계약 최소셋: downstream
 U-DS-01
