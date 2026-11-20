@@ -1,0 +1,10 @@
+build/
+build-asan/
+*.o
+*.d
+__pycache__/
+tests/fixtures/www/big.bin
+tests/fixtures/www/secret.txt
+tests/fixtures/www/escape
+tests/fixtures/www/fifo
+.DS_Store

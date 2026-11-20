@@ -1,0 +1,36 @@
+# CI: Linux·macOS에서 빌드, 린트, 테스트(unit + e2e), Linux는 ASan까지.
+# PENDING은 실패가 아니다. FAIL과 UNEXPECTED PASS만 빨간불 (docs/TESTING.md).
+name: ci
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+
+      - name: Build
+        run: make
+
+      - name: Lint
+        run: make lint
+
+      - name: Test (unit + e2e)
+        run: make test
+
+      - name: ASan + UBSan (Linux)
+        if: runner.os == 'Linux'
+        run: make asan
