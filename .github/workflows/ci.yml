@@ -18,9 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install clang-format (Linux)
+      # clang-format은 메이저 버전마다 출력이 달라 apt 버전(이미지마다 다름) 대신 18.1.8로 고정한다 (D-030).
+      - name: Install clang-format 18.1.8 (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang-format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cf"
+          "$RUNNER_TEMP/cf/bin/pip" install --quiet clang-format==18.1.8
+          echo "CLANG_FORMAT=$RUNNER_TEMP/cf/bin/clang-format" >> "$GITHUB_ENV"
 
       - name: Build
         run: make

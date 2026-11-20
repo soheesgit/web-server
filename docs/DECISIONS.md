@@ -251,3 +251,11 @@
 - 결정: CGI 헤더에 유효한 Content-Length가 있으면 LENGTH, 없으면 HTTP/1.1 클라이언트에는 CHUNKED, HTTP/1.0 클라이언트에는 close로 끝낸다 (`response_write_head`의 1.0 + CHUNKED 규칙).
 - 대안: 항상 close.
 - 영향: `handler/handler.h` (`cgi_parse_head`), `downstream/conn.h`. E-CG-08.
+
+## D-030 CI의 clang-format을 18.1.8로 고정
+- 상태: 제안
+- 날짜: 2026-11-20
+- 맥락: 지시문 8.5절은 Linux CI에서 `apt-get install clang-format`을 쓰라고 했지만, `ubuntu-latest`가 Ubuntu 26.04로 바뀌면서 apt의 clang-format 메이저 버전이 올라갔고, 한글 줄끝 주석의 정렬 결과가 18과 달라 v0.1-interfaces 태그 커밋의 Linux CI가 Lint에서 실패했다.
+- 결정: CI는 venv에 `clang-format==18.1.8`(PyPI 바이너리 휠)을 설치해 `CLANG_FORMAT`으로 넘긴다. 로컬에서도 같은 버전을 쓴다 (`python3 -m venv .venv && .venv/bin/pip install clang-format==18.1.8`, `make lint CLANG_FORMAT=.venv/bin/clang-format`). 태그는 옮기지 않고(force push 금지) 후속 커밋으로 고친다.
+- 대안: apt 버전에 맞춰 재포맷 (이미지가 바뀔 때마다 다시 깨짐), clang-format 검사를 CI에서 빼기.
+- 영향: `.github/workflows/ci.yml`, `README.md`.

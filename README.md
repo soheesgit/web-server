@@ -22,7 +22,7 @@ make test               # 계약 최소셋(C) + 기능 테스트(E2E), 마지막
 make unit               # C 계약 최소셋만
 make e2e                # E2E만 (서버와 fake 백엔드를 띄움)
 make test ONLY=E-PX     # ID 접두사로 거르기
-make lint               # include 방향, 금지 함수, 헤더 검사, clang-format
+make lint               # include 방향, 금지 함수, 헤더 검사, clang-format (18.1.8 고정, D-030)
 make asan               # ASan + UBSan 빌드로 make test
 ```
 
