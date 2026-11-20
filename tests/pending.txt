@@ -2,8 +2,6 @@
 # 구현 PR에서 통과시킨 ID를 지운다. ID를 추가하지 않는다.
 
 # --- U-CORE --- 계약 최소셋: core
-U-CORE-04
-U-CORE-05
 U-CORE-08
 U-CORE-10
 U-CORE-11
