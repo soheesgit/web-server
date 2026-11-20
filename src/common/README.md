@@ -36,4 +36,4 @@ I/O 금지. 모든 함수는 순수 함수이며 `[thread-safe]`(출력 버퍼 �
 - [x] http_headers
 - [x] http_framing — 본문 길이
 - [x] http_framing — 경계 추적, keep-alive
-- [ ] http_status
+- [x] http_status
