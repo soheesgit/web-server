@@ -673,3 +673,86 @@ def prepare_fixtures():
 def stat_is_fifo(path):
     import stat
     return stat.S_ISFIFO(os.lstat(path).st_mode)
+
+
+# ── 큰 본문 ───────────────────────────────────────────────────────────────────
+
+def set_linger_rst(sock):
+    """close 시 RST를 보내도록 SO_LINGER {1, 0}을 건다."""
+    import struct
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+
+
+class _RssSampler:
+    """서버 RSS를 0.1초마다 재서 최대 증가량(KB)을 기록한다."""
+
+    def __init__(self, pid):
+        import threading
+        self.pid = pid
+        self.base = rss_kb(pid) if pid else None
+        self.peak = self.base
+        self._stop = threading.Event()
+        self._th = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        while not self._stop.wait(0.1):
+            v = rss_kb(self.pid)
+            if v is not None and (self.peak is None or v > self.peak):
+                self.peak = v
+
+    def __enter__(self):
+        if self.pid:
+            self._th.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._th.is_alive():
+            self._th.join(timeout=1)
+        return False
+
+    @property
+    def growth_kb(self):
+        if self.base is None or self.peak is None:
+            return 0
+        return self.peak - self.base
+
+
+def stream_get(port, target, headers=(), sample_pid=None, limit=None, timeout=20.0):
+    """GET 하나를 보내고 본문을 메모리에 모으지 않고 SHA-256과 길이만 센다.
+
+    Content-Length 또는 연결 종료로 끝나는 본문을 읽는다. limit이 있으면 그 바이트만큼 읽고
+    RST로 끊는다. sample_pid가 있으면 그 프로세스의 RSS 최대 증가량을 잰다.
+    반환: dict(status, headers, nbytes, sha256, rss_growth_kb)
+    """
+    c = Conn(port, timeout=timeout)
+    try:
+        c.send(build_request("GET", target, headers, port=port))
+        head = c.rd.read_head()
+        _, status, _, hdrs = _parse_head(head)
+        cl = [v for k, v in hdrs if k.lower() == "content-length"]
+        want = int(cl[0]) if cl else None
+        h = hashlib.sha256()
+        n = 0
+        with _RssSampler(sample_pid) as rs:
+            if c.rd.buf:
+                chunk = bytes(c.rd.buf)
+                c.rd.buf.clear()
+                h.update(chunk)
+                n += len(chunk)
+            while (want is None or n < want) and (limit is None or n < limit):
+                c.sock.settimeout(timeout)
+                try:
+                    data = c.sock.recv(1 << 18)
+                except ConnectionResetError:
+                    break
+                if not data:
+                    break
+                h.update(data)
+                n += len(data)
+        if limit is not None:
+            set_linger_rst(c.sock)
+        return {"status": status, "headers": hdrs, "nbytes": n, "sha256": h.hexdigest(),
+                "rss_growth_kb": rs.growth_kb}
+    finally:
+        c.close()
