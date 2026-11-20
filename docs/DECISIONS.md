@@ -237,7 +237,7 @@
 - 영향: `upstream/relay.c`.
 
 ## D-028 루트 README에 기존 과제 요구사항을 부록으로 보존
-- 상태: 제안
+- 상태: 폐기 (D-031로 대체)
 - 날짜: 2026-11-20
 - 맥락: `main`의 첫 커밋 README에는 과제 요구사항이 있었고, 지시문 10.1절은 루트 README의 내용을 새로 정한다.
 - 결정: 10.1절 순서로 쓰고, 기존 과제 요구사항은 맨 끝 "부록: 과제 요구사항"에 그대로 둔다.
@@ -259,3 +259,11 @@
 - 결정: CI는 venv에 `clang-format==18.1.8`(PyPI 바이너리 휠)을 설치해 `CLANG_FORMAT`으로 넘긴다. 로컬에서도 같은 버전을 쓴다 (`python3 -m venv .venv && .venv/bin/pip install clang-format==18.1.8`, `make lint CLANG_FORMAT=.venv/bin/clang-format`). 태그는 옮기지 않고(force push 금지) 후속 커밋으로 고친다.
 - 대안: apt 버전에 맞춰 재포맷 (이미지가 바뀔 때마다 다시 깨짐), clang-format 검사를 CI에서 빼기.
 - 영향: `.github/workflows/ci.yml`, `README.md`.
+
+## D-031 루트 README는 main의 과제 요구사항 문서를 그대로 유지
+- 상태: 확정
+- 날짜: 2026-11-20
+- 맥락: 지시문 10.1절대로 루트 README를 프로젝트 안내로 새로 썼으나(D-028), 저장소 주인이 main의 README를 덮어쓰지 말라고 요청했다.
+- 결정: develop의 `README.md`를 main과 같은 내용(과제 요구사항)으로 되돌린다. 빌드·실행·테스트 방법은 `docs/TESTING.md`와 `tests/README.md`, 디렉토리 안내는 `docs/ARCHITECTURE.md`와 각 `src/<dir>/README.md`, 협업 규칙은 `AGENTS.md`와 `docs/CONVENTIONS.md`에서 본다.
+- 대안: 프로젝트 안내를 README 앞에 두고 과제 요구사항을 부록으로 둠 (D-028).
+- 영향: `README.md`.
