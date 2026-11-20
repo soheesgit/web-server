@@ -37,7 +37,7 @@
 ## 구현 단계
 1단계 (`core` + `common`). 분담: A `str`, `buf` · B `config`, `log` · C `platform`.
 - [x] str
-- [ ] buf
+- [x] buf
 - [ ] config
 - [ ] log
 - [ ] platform
