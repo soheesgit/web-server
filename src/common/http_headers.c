@@ -3,7 +3,6 @@
  * 헤더 끝 탐색·파싱·쓰기. 명세: http_headers.h
  */
 #include "common/http_headers.h"
-#include "core/stub.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -164,17 +163,62 @@ bool http_token_valid(str_t s)
 
 bool http_is_hop_by_hop(str_t name, const http_headers_t *h)
 {
-    UNUSED(name);
-    UNUSED(h);
-    /* TODO(common): 구현 — U-COM-40, E-PX-03 */
-    STUB_RETURN(false);
+    static const char *const fixed[] = {
+        "Connection",
+        "Keep-Alive",
+        "Proxy-Connection",
+        "TE",
+        "Trailer",
+        "Transfer-Encoding",
+        "Upgrade",
+        "Proxy-Authenticate",
+        "Proxy-Authorization",
+    };
+
+    for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
+        if (str_eq_ci(name, fixed[i])) {
+            return true;
+        }
+    }
+    if (h == NULL) {
+        return false;
+    }
+    /* Connection 헤더 값에 쉼표로 나열된 이름 */
+    for (size_t i = 0; i < h->n; i++) {
+        str_t v = h->v[i].value;
+        size_t start = 0;
+
+        if (!str_eq_ci(h->v[i].name, "Connection")) {
+            continue;
+        }
+        for (size_t k = 0; k <= v.len; k++) {
+            if (k == v.len || v.ptr[k] == ',') {
+                str_t item = {v.ptr + start, k - start};
+                if (str_eq_ci_str(str_trim_ows(item), name)) {
+                    return true;
+                }
+                start = k + 1;
+            }
+        }
+    }
+    return false;
 }
 
 int http_headers_write(const http_headers_t *h, bool skip_hop_by_hop, buf_t *out)
 {
-    UNUSED(h);
-    UNUSED(skip_hop_by_hop);
-    UNUSED(out);
-    /* TODO(common): 구현 — (테스트 없음) */
-    STUB_RETURN(-1);
+    size_t saved = out->len;
+
+    for (size_t i = 0; i < h->n; i++) {
+        const http_header_t *x = &h->v[i];
+
+        if (skip_hop_by_hop && http_is_hop_by_hop(x->name, h)) {
+            continue;
+        }
+        if (buf_append(out, x->name.ptr, x->name.len) != 0 || buf_append(out, ": ", 2) != 0 ||
+            buf_append(out, x->value.ptr, x->value.len) != 0 || buf_append(out, "\r\n", 2) != 0) {
+            out->len = saved;
+            return -1;
+        }
+    }
+    return 0;
 }

@@ -15,7 +15,6 @@ U-COM-26
 U-COM-29
 U-COM-32
 U-COM-38
-U-COM-40
 
 # --- U-DS --- 계약 최소셋: downstream
 U-DS-01
