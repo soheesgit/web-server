@@ -38,6 +38,6 @@
 - [x] request_parser
 - [x] uri
 - [x] response_writer
-- [ ] listener
+- [x] listener
 - [ ] conn — blocking 경로 (v1)
 - [ ] conn — 이벤트 경로 (v2)
