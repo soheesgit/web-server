@@ -99,7 +99,7 @@ ssize_t platform_send(int fd, const void *p, size_t n);
  * 스레드:  [thread-safe]
  * I/O:     파일 읽기, 소켓 쓰기
  * 블로킹:  out_fd가 blocking이면 SO_SNDTIMEO까지
- * 테스트:  추후 U-CORE-31
+ * 테스트:  U-CORE-31
  */
 ssize_t platform_sendfile(int out_fd, int in_fd, off_t *inout_off, size_t count);
 
