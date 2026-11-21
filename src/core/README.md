@@ -39,5 +39,5 @@
 - [x] str
 - [x] buf
 - [ ] config
-- [ ] log
+- [x] log
 - [x] platform
