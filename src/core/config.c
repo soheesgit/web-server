@@ -492,8 +492,8 @@ static int read_file(cfg_ctx_t *c, char **out, size_t *out_len)
 
 static int parse_file(cfg_ctx_t *c)
 {
-    char *data;
-    size_t len;
+    char *data = NULL;
+    size_t len = 0;
     size_t pos = 0;
     int rc = 0;
 
