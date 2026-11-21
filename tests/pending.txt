@@ -15,16 +15,10 @@ U-CORE-29
 U-CORE-30
 
 # --- U-COM --- 계약 최소셋: common
-U-COM-01
-U-COM-02
-U-COM-04
 U-COM-07
-U-COM-10
 U-COM-18
 U-COM-21
 U-COM-26
-U-COM-29
-U-COM-32
 U-COM-38
 U-COM-40
 
@@ -33,9 +27,6 @@ U-DS-01
 U-DS-06
 U-DS-07
 U-DS-12
-U-DS-22
-U-DS-27
-U-DS-28
 U-DS-30
 U-DS-36
 U-DS-40
@@ -47,7 +38,6 @@ U-RT-03
 
 # --- U-HD --- 계약 최소셋: handler (plan·static·cgi)
 U-HD-02
-U-HD-04
 U-HD-09
 U-HD-11
 U-HD-14

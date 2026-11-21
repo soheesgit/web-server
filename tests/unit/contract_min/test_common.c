@@ -95,6 +95,12 @@ static void t_u_com_07(void)
     CHECK_STR_EQ(h.v[1].value, "two");
     CHECK_STR_EQ(h.v[2].name, "C");
     CHECK_STR_EQ(h.v[2].value, "3");
+
+    const char invalid[] = "X-Value: a\0b\r\n";
+    CHECK_EQ_INT(http_parse_headers(invalid, sizeof(invalid) - 1, 64, &h, &st), -1);
+    CHECK_EQ_INT(st, 400);
+    CHECK_EQ_INT(http_parse_headers(p, strlen(p), 2, &h, &st), -1);
+    CHECK_EQ_INT(st, 431);
 }
 
 static void t_u_com_10(void)
@@ -117,6 +123,14 @@ static void t_u_com_18(void)
     CHECK_EQ_INT(http_resolve_framing(&h, false, 0, HTTP_POST, &f, &st), 0);
     CHECK_EQ_INT(f.kind, FRAMING_LENGTH);
     CHECK_EQ_INT(f.length, 15);
+    add_hdr(&h, "content-length", "15, 015");
+    CHECK_EQ_INT(http_resolve_framing(&h, false, 0, HTTP_POST, &f, &st), 0);
+    CHECK_EQ_INT(f.length, 15);
+    add_hdr(&h, "Content-Length", "16");
+    CHECK_EQ_INT(http_resolve_framing(&h, false, 0, HTTP_POST, &f, &st), -1);
+    CHECK_EQ_INT(st, 400);
+    h.v[2].value = S("18446744073709551616");
+    CHECK_EQ_INT(http_resolve_framing(&h, false, 0, HTTP_POST, &f, &st), -1);
 }
 
 static void t_u_com_21(void)
@@ -129,6 +143,21 @@ static void t_u_com_21(void)
     add_hdr(&h, "Content-Length", "5");
     CHECK_EQ_INT(http_resolve_framing(&h, false, 0, HTTP_POST, &f, &st), -1);
     CHECK_EQ_INT(st, 400);
+    CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), -1);
+    CHECK_EQ_INT(st, 502);
+
+    h.n = 1;
+    CHECK_EQ_INT(http_resolve_framing(&h, false, 0, HTTP_POST, &f, &st), 0);
+    CHECK_EQ_INT(f.kind, FRAMING_CHUNKED);
+    add_hdr(&h, "Transfer-Encoding", "chunked");
+    CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), -1);
+    CHECK_EQ_INT(st, 502);
+    h.n = 1;
+    h.v[0].value = S("gzip, chunked");
+    CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), 0);
+    CHECK_EQ_INT(f.kind, FRAMING_CHUNKED);
+    h.v[0].value = S("gzip,,chunked");
+    CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), -1);
 }
 
 static void t_u_com_26(void)
@@ -145,14 +174,19 @@ static void t_u_com_26(void)
 
 static void t_u_com_29(void)
 {
+    const char data[] = "abc\0defghiNEXT";
     http_body_tracker_t t;
     http_framing_t f = {FRAMING_LENGTH, 10};
     size_t used = 0;
 
     memset(&t, 0, sizeof(t));
     http_body_tracker_init(&t, f);
-    CHECK_EQ_INT(http_body_track(&t, "0123456789", 10, &used), BODY_DONE);
-    CHECK_EQ_INT(used, 10);
+    CHECK_EQ_INT(http_body_track(&t, data, 4, &used), BODY_MORE);
+    CHECK_EQ_INT(used, 4);
+    CHECK_EQ_INT(http_body_track(&t, NULL, 0, &used), BODY_MORE);
+    CHECK_EQ_INT(t.remaining, 6);
+    CHECK_EQ_INT(http_body_track(&t, data + 4, sizeof(data) - 5, &used), BODY_DONE);
+    CHECK_EQ_INT(used, 6);
 }
 
 static void t_u_com_32(void)
@@ -166,6 +200,41 @@ static void t_u_com_32(void)
     http_body_tracker_init(&t, f);
     CHECK_EQ_INT(http_body_track(&t, p, strlen(p), &used), BODY_DONE);
     CHECK_EQ_INT(used, strlen(p));
+}
+
+static void t_u_com_33(void)
+{
+    static const char msg[] = "3;tag=x\r\na\0b\r\n0\r\nX-Trace: ok\r\n\r\nNEXT";
+    static const char *const bad[] = {
+        "10000000000000000\r\n",
+        "1\r\na\rX",
+        "1 junk\r\n",
+        "0\r\nNo-Colon\r\n\r\n",
+    };
+    const size_t body_len = sizeof(msg) - sizeof("NEXT");
+    http_body_tracker_t t;
+    http_framing_t f = {FRAMING_CHUNKED, 0};
+    size_t used;
+
+    for (size_t split = 0; split < body_len; split++) {
+        http_body_tracker_init(&t, f);
+        CHECK_EQ_INT(http_body_track(&t, msg, split, &used), BODY_MORE);
+        CHECK_EQ_INT(used, split);
+        CHECK_EQ_INT(http_body_track(&t, NULL, 0, &used), BODY_MORE);
+        CHECK_EQ_INT(used, 0);
+        CHECK_EQ_INT(http_body_track(&t, msg + split, sizeof(msg) - 1 - split, &used), BODY_DONE);
+        CHECK_EQ_INT(used, body_len - split);
+    }
+    http_body_tracker_init(&t, f);
+    for (size_t i = 0; i < body_len; i++) {
+        CHECK_EQ_INT(http_body_track(&t, msg + i, 1, &used),
+                     i == body_len - 1 ? BODY_DONE : BODY_MORE);
+        CHECK_EQ_INT(used, 1);
+    }
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        http_body_tracker_init(&t, f);
+        CHECK_EQ_INT(http_body_track(&t, bad[i], strlen(bad[i]), &used), BODY_ERROR);
+    }
 }
 
 static void t_u_com_38(void)
@@ -200,6 +269,20 @@ static void t_u_com_40(void)
         }
     }
     CHECK(http_is_hop_by_hop(S("Content-Type"), NULL) == false);
+
+    http_headers_t h = {0};
+    buf_t out;
+    const char expected[] = "Content-Type: text/plain\r\n";
+    add_hdr(&h, "X-Intra", "a");
+    add_hdr(&h, "Connection", " X-Other , x-intra ");
+    add_hdr(&h, "Content-Type", "text/plain");
+    add_hdr(&h, "Connection", "close");
+    add_hdr(&h, "X-Other", "b");
+    CHECK(http_is_hop_by_hop(S("X-Intra"), &h));
+    CHECK_EQ_INT(buf_init(&out, 32, 128), 0);
+    CHECK_EQ_INT(http_headers_write(&h, true, &out), 0);
+    CHECK_EQ_MEM(out.data, out.len, expected, sizeof(expected) - 1);
+    buf_cleanup(&out);
 }
 
 void register_common_tests(void)
@@ -214,6 +297,7 @@ void register_common_tests(void)
     test_register("U-COM-26", "http_resolve_framing: response CL 100", t_u_com_26);
     test_register("U-COM-29", "http_body_track: LENGTH 10 with 10 bytes", t_u_com_29);
     test_register("U-COM-32", "http_body_track: chunked body to the end", t_u_com_32);
+    test_register("U-COM-33", "http_body_track: fragmented chunked body", t_u_com_33);
     test_register("U-COM-38", "http_keep_alive: HTTP/1.1 Connection variants", t_u_com_38);
     test_register("U-COM-40", "http_is_hop_by_hop: fixed list, mixed case", t_u_com_40);
 }

@@ -50,6 +50,33 @@ static void t_u_ds_01(void)
     CHECK_EQ_INT(req.framing.kind, FRAMING_NONE);
     CHECK(req.keep_alive == true);
     CHECK_EQ_INT(req.head_len, strlen(p));
+
+    const char post[] = "POST /a/%2e%2e/b?x=1 HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\n\r\na\0b";
+    const size_t head_len = sizeof(post) - 4;
+    CHECK_EQ_INT(request_parse_head(NULL, 0, &LIM, &req, &st), HTTP_PARSE_INCOMPLETE);
+    for (size_t n = 1; n < head_len; n++) {
+        CHECK_EQ_INT(request_parse_head(post, n, &LIM, &req, &st), HTTP_PARSE_INCOMPLETE);
+    }
+    CHECK_EQ_INT(request_parse_head(post, sizeof(post) - 1, &LIM, &req, &st), HTTP_PARSE_DONE);
+    CHECK_EQ_INT(req.head_len, head_len);
+    CHECK_EQ_INT(req.body.len, 0);
+    CHECK_EQ_INT(req.framing.kind, FRAMING_LENGTH);
+    CHECK_EQ_INT(req.framing.length, 3);
+    CHECK_EQ_STR(req.path, "/b");
+    CHECK_STR_EQ(req.raw_path, "/a/%2e%2e/b");
+    CHECK_STR_EQ(req.query, "x=1");
+
+    http_limits_t lim = LIM;
+    lim.max_body = 2;
+    CHECK_EQ_INT(request_parse_head(post, head_len, &lim, &req, &st), HTTP_PARSE_ERROR);
+    CHECK_EQ_INT(st, 413);
+    lim.max_uri = 2;
+    CHECK_EQ_INT(request_parse_head(post, head_len, &lim, &req, &st), HTTP_PARSE_ERROR);
+    CHECK_EQ_INT(st, 414);
+    CHECK_EQ_INT(
+        parse("POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n", &req, &st),
+        HTTP_PARSE_ERROR);
+    CHECK_EQ_INT(st, 501);
 }
 
 static void t_u_ds_06(void)
@@ -76,6 +103,9 @@ static void t_u_ds_07(void)
         "GET /\r\nHost: a\r\n\r\n",
         "GET / HTTP/1.1 extra\r\nHost: a\r\n\r\n",
         "GET  / HTTP/1.1\r\nHost: a\r\n\r\n",
+        "GET /%2e%2e%2foutside HTTP/1.1\r\nHost: a\r\n\r\n",
+        "GET /%00 HTTP/1.1\r\nHost: a\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost : a\r\n\r\n",
     };
     http_request_t req;
     int st;
@@ -87,6 +117,10 @@ static void t_u_ds_07(void)
             return;
         }
     }
+    const char nul_target[] = "GET /a\0b HTTP/1.1\r\nHost: a\r\n\r\n";
+    CHECK_EQ_INT(request_parse_head(nul_target, sizeof(nul_target) - 1, &LIM, &req, &st),
+                 HTTP_PARSE_ERROR);
+    CHECK_EQ_INT(st, 400);
 }
 
 static void t_u_ds_12(void)
@@ -115,6 +149,10 @@ static void t_u_ds_22(void)
     CHECK_EQ_INT(uri_decode_path(b, out, sizeof(out), &n), 0);
     CHECK_EQ_MEM(out, n, "\xEA\xB0\x80", 3);
     CHECK_EQ_STR(out, "\xEA\xB0\x80");
+    CHECK_EQ_INT(uri_decode_path((str_t){"a\0b", 3}, out, sizeof(out), &n), -1);
+    CHECK_EQ_INT(uri_decode_path((str_t){"%00", 3}, out, sizeof(out), &n), -1);
+    CHECK_EQ_INT(uri_decode_path((str_t){"%2", 2}, out, sizeof(out), &n), -1);
+    CHECK_EQ_INT(uri_decode_path((str_t){"%20", 3}, out, 1, &n), -1);
 }
 
 static void t_u_ds_27(void)
