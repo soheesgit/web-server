@@ -267,3 +267,11 @@
 - 결정: develop의 `README.md`를 main과 같은 내용(과제 요구사항)으로 되돌린다. 빌드·실행·테스트 방법은 `docs/TESTING.md`와 `tests/README.md`, 디렉토리 안내는 `docs/ARCHITECTURE.md`와 각 `src/<dir>/README.md`, 협업 규칙은 `AGENTS.md`와 `docs/CONVENTIONS.md`에서 본다.
 - 대안: 프로젝트 안내를 README 앞에 두고 과제 요구사항을 부록으로 둠 (D-028).
 - 영향: `README.md`.
+
+## D-032 conn v1의 송신·중계 정체 마감과 종료 판정
+- 상태: 제안
+- 날짜: 2026-11-21
+- 맥락: `downstream/conn.h`는 헤더·본문 수신, CGI, 업스트림 응답 머리의 마감은 정했지만, v1에서 클라이언트로 보내는 중이나 업스트림 본문을 중계하는 중에 진행이 멈췄을 때의 상한과, 처리 순서 11의 "서버 종료 중"을 conn이 어떻게 아는지는 정하지 않았다. `conn_env_t`에는 정지 플래그가 없다.
+- 결정: 클라이언트 송신(머리, 메모리·파일·CGI 본문)은 마지막 진행 뒤 `body_timeout_ms`, 업스트림 본문 읽기는 마지막 진행 뒤 `upstream_response_timeout_ms`가 지나면 연결을 닫는다(응답 머리가 이미 나갔으므로 에러 응답 없음). v1 conn은 서버 종료를 직접 판정하지 않고, engine이 유예 뒤 `shutdown(SHUT_RDWR)`로 연결을 끝내는 것(`engine_run` 명세)에 맡긴다.
+- 대안: 송신 정체 전용 설정값 추가 (config 변경 필요). `conn_env_t`에 정지 플래그 추가 (공개 헤더 변경 필요).
+- 영향: `downstream/conn.c`. E-SL-*, E-KA-*.
