@@ -132,7 +132,9 @@ ssize_t platform_sendfile(int out_fd, int in_fd, off_t *inout_off, size_t count)
         w = sendfile(out_fd, in_fd, inout_off, count);
     } while (w < 0 && errno == EINTR);
     saved = errno;
-    if (w < 0 && saved == EPIPE && !was_pending) {
+    /* 일부를 보낸 뒤 끊기면 w > 0이어도 SIGPIPE가 대기 중일 수 있어 반환값으로 판단하지 않는다 */
+    (void)sigemptyset(&pending);
+    if (!was_pending && sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1) {
         (void)sigtimedwait(&pipe_set, NULL, &zero);
     }
     (void)pthread_sigmask(SIG_SETMASK, &old_set, NULL);
