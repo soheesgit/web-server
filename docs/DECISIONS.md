@@ -267,3 +267,27 @@
 - 결정: develop의 `README.md`를 main과 같은 내용(과제 요구사항)으로 되돌린다. 빌드·실행·테스트 방법은 `docs/TESTING.md`와 `tests/README.md`, 디렉토리 안내는 `docs/ARCHITECTURE.md`와 각 `src/<dir>/README.md`, 협업 규칙은 `AGENTS.md`와 `docs/CONVENTIONS.md`에서 본다.
 - 대안: 프로젝트 안내를 README 앞에 두고 과제 요구사항을 부록으로 둠 (D-028).
 - 영향: `README.md`.
+
+## D-033 chunked 요청 본문 지원
+- 상태: 제안
+- 날짜: 2026-11-21
+- 맥락: 공통 프레이밍과 추적기는 chunked 경계를 인식하지만 D-003과 요청 파서 계약은 chunked를 501로 처리한다.
+- 결정: 팀 합의 후 요청 프레이밍에 CHUNKED를 허용하고, 연결 모듈이 청크를 디코딩해 body를 채우도록 계약을 갱신한다. 수신 한도는 디코딩된 길이와 청크 메타데이터에 적용하고, 다음 요청을 보존하기 위해 소비할 원본 바이트 수를 별도로 추적한다. 업스트림에 디코딩된 본문을 보낼 때는 실제 길이로 Content-Length를 다시 만든다.
+- 대안: D-003의 501 정책 유지.
+- 영향: `common/types.h`, `downstream/request_parser.h`, `downstream/conn.h`, `upstream/request_writer.h`, U-DS-14, E-ER-09.
+
+## D-034 응답 계획의 활성 union 멤버 초기화
+- 상태: 제안
+- 날짜: 2026-11-21
+- 맥락: plan_init 주석은 fd의 -1과 업스트림 포인터의 NULL을 동시에 요구한다. 두 값은 body union의 같은 저장 공간을 사용한다.
+- 결정: BODY_NONE에서는 body에 접근하지 않고, 처리기가 kind에 맞는 멤버를 통째로 초기화하도록 주석을 명확히 한다.
+- 대안: 본문별 생성 함수 추가.
+- 영향: `common/types.h`, `handler/plan.h`, `handler/static.c`, `handler/cgi.c`, `handler/proxy.c`, U-HD-01.
+
+## D-035 업스트림 전송 코딩 중계
+- 상태: 제안
+- 날짜: 2026-11-21
+- 맥락: 공통 프레이밍은 마지막 코딩이 chunked인 목록의 본문 경계를 추적할 수 있다. 다운스트림 직렬화 계약은 Transfer-Encoding에 chunked만 쓴다.
+- 결정: 중계하는 원본 바이트에 앞선 전송 코딩이 남아 있다면, 변환을 지원하기 전까지 프록시가 해당 응답을 헤더 송신 전에 502로 처리하도록 합의한다. HTTP/1.0으로 chunked 응답을 중계할 때는 청크 프레이밍을 제거한 바이트만 전송한다.
+- 대안: 원래의 전송 코딩 목록을 보존하거나 각 코딩을 해제한 다음 본문을 다시 프레이밍한다.
+- 영향: `handler/handler.h`, `handler/proxy.c`, `downstream/response_writer.h`, E-PX-05, E-PX-16.
