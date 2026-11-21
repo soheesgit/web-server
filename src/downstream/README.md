@@ -39,5 +39,5 @@
 - [x] uri
 - [x] response_writer
 - [x] listener
-- [ ] conn — blocking 경로 (v1)
+- [x] conn — blocking 경로 (v1)
 - [ ] conn — 이벤트 경로 (v2)
