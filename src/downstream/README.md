@@ -37,7 +37,7 @@
 2단계. 분담: A `request_parser` · B `uri`, `response_writer` · C `listener`, `conn`(blocking 경로). 7단계(선택) B `conn` 이벤트 경로.
 - [x] request_parser
 - [x] uri
-- [ ] response_writer
+- [x] response_writer
 - [ ] listener
 - [ ] conn — blocking 경로 (v1)
 - [ ] conn — 이벤트 경로 (v2)

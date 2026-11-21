@@ -29,7 +29,6 @@ U-COM-38
 U-COM-40
 
 # --- U-DS --- 계약 최소셋: downstream
-U-DS-30
 U-DS-36
 U-DS-40
 U-DS-44
