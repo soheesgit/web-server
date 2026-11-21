@@ -7,7 +7,7 @@
 | 층 | 범위 | ID | 위치 | 실행 |
 | --- | --- | --- | --- | --- |
 | 기능 (E2E) | **현재** | `E-<분류>-NN` (ST·CG·PX·KA·ER·SL·CF), 68개 | `tests/e2e/test_*.py` | `make e2e` |
-| 계약 최소셋 | **현재** | `U-<영역>-NN` 중 55개 | `tests/unit/contract_min/test_<영역>.c` | `make unit` |
+| 계약 최소셋 | **현재** | `U-<영역>-NN` 중 56개 | `tests/unit/contract_min/test_<영역>.c` | `make unit` |
 | 단위 (나머지) | 추후 | `U-<영역>-NN` | `tests/unit/` | `make unit` |
 | 경계 | 추후 | `C-NN` | (추후 `tests/contract/`) | — |
 | 비기능 | 추후 | `N-<분류>-NN` | (추후 `tests/nonfunc/`) | — |

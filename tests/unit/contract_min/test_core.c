@@ -4,12 +4,15 @@
  */
 #include "unit/testlib.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <netinet/in.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -235,6 +238,123 @@ static void t_u_core_30(void)
     close(sv[0]);
 }
 
+/* 127.0.0.1:0에 TCP 연결 하나를 만든다. 0 성공, -1 실패. */
+static int tcp_pair(int *out_srv, int *out_cli)
+{
+    struct sockaddr_in a;
+    socklen_t al = sizeof(a);
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    int rc = -1;
+
+    if (ls < 0) {
+        return -1;
+    }
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    *out_cli = -1;
+    *out_srv = -1;
+    if (bind(ls, (struct sockaddr *)&a, sizeof(a)) == 0 &&
+        getsockname(ls, (struct sockaddr *)&a, &al) == 0 && listen(ls, 1) == 0) {
+        *out_cli = socket(AF_INET, SOCK_STREAM, 0);
+        if (*out_cli >= 0 && connect(*out_cli, (struct sockaddr *)&a, sizeof(a)) == 0) {
+            *out_srv = accept(ls, NULL, NULL);
+            rc = *out_srv >= 0 ? 0 : -1;
+        }
+    }
+    close(ls);
+    return rc;
+}
+
+#define U31_FILE_SIZE (1024 * 1024)
+
+/* 1 MiB 파일을 임시 디렉토리에 만들어 연 fd를 돌려준다. data에 같은 내용을 채운다. */
+static int u31_open_file(char *data)
+{
+    const char *dir = test_tmpdir();
+    char path[4096];
+
+    for (size_t i = 0; i < U31_FILE_SIZE; i++) {
+        data[i] = (char)('a' + (i * 7 + i / 251) % 26);
+    }
+    if (dir == NULL || test_write_file(dir, "big.bin", data, U31_FILE_SIZE, 0644) != 0 ||
+        snprintf(path, sizeof(path), "%s/big.bin", dir) >= (int)sizeof(path)) {
+        return -1;
+    }
+    return open(path, O_RDONLY);
+}
+
+static void t_u_core_31(void)
+{
+    static char data[U31_FILE_SIZE];
+    static char got[500000];
+    size_t want = sizeof(got);
+    size_t sent = 0;
+    size_t recvd = 0;
+    off_t off = 1000;
+    int srv, cli, fd;
+    ssize_t w = 0;
+
+    /* 구현이 SIGPIPE를 일으키면 이 자식은 시그널로 죽어 실패한다 (U-CORE-30과 같음) */
+    signal(SIGPIPE, SIG_DFL);
+    fd = u31_open_file(data);
+    CHECK(fd >= 0);
+
+    /* 1. offset 1000부터 500,000바이트. 소켓 버퍼보다 크므로 non-blocking으로 보내고
+     *    EAGAIN이면 받는 쪽을 비운다. 반환값은 매번 보낸 양이고 off도 그만큼 전진한다. */
+    CHECK_EQ_INT(tcp_pair(&srv, &cli), 0);
+    CHECK_EQ_INT(platform_set_nonblock(srv), 0);
+    while (recvd < want) {
+        if (sent < want) {
+            off_t before = off;
+            w = platform_sendfile(srv, fd, &off, want - sent);
+            if (w > 0) {
+                CHECK((size_t)w <= want - sent);
+                CHECK_EQ_INT(off - before, w);
+                sent += (size_t)w;
+                continue;
+            }
+            CHECK(w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+        }
+        w = read(cli, got + recvd, want - recvd);
+        CHECK(w > 0);
+        recvd += (size_t)w;
+    }
+    CHECK_EQ_INT(sent, want);
+    CHECK_EQ_INT(off, 1000 + (off_t)want);
+    CHECK(memcmp(got, data + 1000, want) == 0);
+    /* 파일 끝이면 0 */
+    off = U31_FILE_SIZE;
+    CHECK_EQ_INT(platform_sendfile(srv, fd, &off, 100), 0);
+    close(cli);
+    close(srv);
+
+    /* 2. 닫힌 상대 (회귀: 073a934). 일부를 보낸 뒤 끊기면 Linux sendfile은 양수를 돌려주면서
+     *    SIGPIPE를 대기시킨다. 프로세스는 살아 있어야 하고, 결국 -1 + EPIPE/ECONNRESET/ENOTCONN. */
+    CHECK_EQ_INT(tcp_pair(&srv, &cli), 0);
+    CHECK_EQ_INT(platform_set_nonblock(srv), 0);
+    close(cli);
+    off = 0;
+    for (int i = 0; i < 1000; i++) {
+        errno = 0;
+        w = platform_sendfile(srv, fd, &off, U31_FILE_SIZE);
+        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            break;
+        }
+        if (w == 0) {
+            off = 0; /* 파일 끝까지 다 들어갔으면 처음부터 다시 */
+        }
+        if (w <= 0) {
+            usleep(1000);
+        }
+    }
+    CHECK_EQ_INT(w, -1);
+    /* macOS sendfile은 RST 뒤 ENOTCONN을 돌려준다 */
+    CHECK(errno == EPIPE || errno == ECONNRESET || errno == ENOTCONN);
+    close(srv);
+    close(fd);
+}
+
 void register_core_tests(void)
 {
     test_register("U-CORE-04", "str_to_u64 accepts \"0\" and \"123\"", t_u_core_04);
@@ -248,4 +368,5 @@ void register_core_tests(void)
     test_register("U-CORE-28", "platform_set_nonblock sets O_NONBLOCK", t_u_core_28);
     test_register("U-CORE-29", "platform_set_cloexec sets FD_CLOEXEC", t_u_core_29);
     test_register("U-CORE-30", "platform_send to closed peer: EPIPE, no SIGPIPE", t_u_core_30);
+    test_register("U-CORE-31", "platform_sendfile range + closed peer: no SIGPIPE", t_u_core_31);
 }

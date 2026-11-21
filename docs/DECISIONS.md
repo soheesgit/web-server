@@ -267,3 +267,11 @@
 - 결정: develop의 `README.md`를 main과 같은 내용(과제 요구사항)으로 되돌린다. 빌드·실행·테스트 방법은 `docs/TESTING.md`와 `tests/README.md`, 디렉토리 안내는 `docs/ARCHITECTURE.md`와 각 `src/<dir>/README.md`, 협업 규칙은 `AGENTS.md`와 `docs/CONVENTIONS.md`에서 본다.
 - 대안: 프로젝트 안내를 README 앞에 두고 과제 요구사항을 부록으로 둠 (D-028).
 - 영향: `README.md`.
+
+## D-032 U-CORE-31에 닫힌 상대 회귀 검사를 포함
+- 상태: 제안
+- 날짜: 2026-11-21
+- 맥락: 기획서의 U-CORE-31은 구간 전송(1 MB 파일의 offset 1000부터 500,000바이트)만 정의한다. Linux `sendfile`이 일부를 보낸 뒤 상대가 끊기면 양수를 돌려주면서 SIGPIPE를 대기시켜, 첫 구현이 프로세스를 죽였다(`073a934`에서 수정). "한 함수 = 한 ID" 규칙상 같은 함수의 회귀 검사에 새 ID를 만들 수 없다.
+- 결정: U-CORE-31 안에서 구간 전송 검사 뒤에, SIGPIPE 기본 처분 + 닫힌 상대로 보내 프로세스가 살아 있고 결국 -1(EPIPE, ECONNRESET, macOS는 ENOTCONN)을 돌려주는지 확인한다.
+- 대안: 기획서 정의만 검사하고 회귀는 임시 프로그램으로만 확인, U-CORE-30에 sendfile 검사를 섞기.
+- 영향: `tests/unit/contract_min/test_core.c`. U-CORE-31.
