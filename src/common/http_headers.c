@@ -1,133 +1,110 @@
-/* src/common/http_headers.c
- *
- * 헤더 끝 탐색·파싱·쓰기. 명세: http_headers.h
- */
+/* 요청과 응답의 헤더 구간 탐색, 해석 및 직렬화. */
 #include "common/http_headers.h"
 
-#include <stddef.h>
 #include <string.h>
 
-/* RFC 7230 tchar 표 (0~127) */
-static bool is_tchar(unsigned char c)
-{
-    if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
-        return true;
-    }
-    return c != '\0' && strchr("!#$%&'*+-.^_`|~", c) != NULL;
-}
-
-/* 헤더 값에 허용되지 않는 바이트인가 (HTAB 외 제어 문자, DEL) */
-static bool bad_value_byte(unsigned char c)
-{
-    return (c < 0x20 && c != '\t') || c == 0x7F;
-}
+#include "common/internal_http_text.h"
 
 http_parse_result_t http_find_head_end(const char *p, size_t len, size_t max_head, size_t *out_skip,
                                        size_t *out_head_len, int *out_status)
 {
-    size_t scan_len = len < max_head ? len : max_head;
-    size_t i = 0;
+    const size_t available = len < max_head ? len : max_head;
+    size_t start = 0;
+    size_t first = 0;
+    bool saw_start_line = false;
 
-    /* 1. 앞의 빈 줄("\r\n" 또는 "\n")을 건너뛴다 */
-    while (i < scan_len) {
-        if (p[i] == '\n') {
-            i++;
-        } else if (p[i] == '\r' && scan_len - i >= 2 && p[i + 1] == '\n') {
-            i += 2;
-        } else {
+    while (start < available) {
+        const char *lf = memchr(p + start, '\n', available - start);
+        if (lf == NULL) {
             break;
         }
-    }
 
-    /* 2. 줄 끝 LF 바로 뒤가 빈 줄("\n" 또는 "\r\n")이면 머리 끝이다 */
-    for (size_t j = i; j < scan_len; j++) {
-        size_t end = 0;
-
-        if (p[j] != '\n') {
-            continue;
+        const size_t end = (size_t)(lf - p) + 1;
+        const bool empty = end - start == 1 || (end - start == 2 && p[start] == '\r');
+        if (empty && saw_start_line) {
+            *out_skip = first;
+            *out_head_len = end;
+            return HTTP_PARSE_DONE;
         }
-        if (scan_len - j >= 2 && p[j + 1] == '\n') {
-            end = j + 2;
-        } else if (scan_len - j >= 3 && p[j + 1] == '\r' && p[j + 2] == '\n') {
-            end = j + 3;
-        } else {
-            continue;
+        if (!saw_start_line && !empty) {
+            first = start;
+            saw_start_line = true;
         }
-        *out_skip = i;
-        *out_head_len = end;
-        return HTTP_PARSE_DONE;
+        start = end;
     }
 
-    if (len > max_head) {
-        *out_status = 431;
-        return HTTP_PARSE_ERROR;
+    if (len <= max_head) {
+        return HTTP_PARSE_INCOMPLETE;
     }
-    return HTTP_PARSE_INCOMPLETE;
+    *out_status = 431;
+    return HTTP_PARSE_ERROR;
+}
+
+static bool parse_field(str_t line, http_header_t *out)
+{
+    if (line.len == 0) {
+        return false;
+    }
+    const char *colon = memchr(line.ptr, ':', line.len);
+    if (colon == NULL) {
+        return false;
+    }
+
+    size_t name_len = (size_t)(colon - line.ptr);
+    str_t name = {line.ptr, name_len};
+    str_t value = {colon + 1, line.len - name_len - 1};
+    if (!http_token_valid(name)) {
+        return false;
+    }
+    for (size_t i = 0; i < value.len; ++i) {
+        if (!http_field_byte_valid((unsigned char)value.ptr[i])) {
+            return false;
+        }
+    }
+
+    *out = (http_header_t){name, str_trim_ows(value)};
+    return true;
 }
 
 int http_parse_headers(const char *p, size_t len, size_t max_headers, http_headers_t *out_h,
                        int *out_status)
 {
-    size_t limit = max_headers < HTTP_MAX_HEADERS ? max_headers : HTTP_MAX_HEADERS;
-    size_t pos = 0;
-
+    size_t offset = 0;
     out_h->n = 0;
-    while (pos < len) {
-        const char *line = p + pos;
-        const char *nl = memchr(line, '\n', len - pos);
-        const char *colon;
-        size_t llen;
-        str_t name, value;
 
-        if (nl == NULL) {
-            *out_status = 400; /* 줄 끝이 없다 */
-            return -1;
-        }
-        llen = (size_t)(nl - line);
-        pos += llen + 1;
-        if (llen > 0 && line[llen - 1] == '\r') {
-            llen--;
-        }
-        if (llen == 0 || line[0] == ' ' || line[0] == '\t') {
-            *out_status = 400; /* 중간 빈 줄, obs-fold */
-            return -1;
-        }
-        colon = memchr(line, ':', llen);
-        if (colon == NULL) {
+    while (offset < len) {
+        const char *start = p + offset;
+        const char *lf = memchr(start, '\n', len - offset);
+        http_header_t field;
+
+        if (lf == NULL) {
             *out_status = 400;
             return -1;
         }
-        name.ptr = line;
-        name.len = (size_t)(colon - line);
-        if (!http_token_valid(name)) {
-            *out_status = 400; /* "Host : a" 포함 */
+        size_t line_len = (size_t)(lf - start);
+        offset += line_len + 1;
+        if (line_len != 0 && start[line_len - 1] == '\r') {
+            --line_len;
+        }
+        if (!parse_field((str_t){start, line_len}, &field)) {
+            *out_status = 400;
             return -1;
         }
-        value.ptr = colon + 1;
-        value.len = llen - name.len - 1;
-        value = str_trim_ows(value);
-        for (size_t k = 0; k < value.len; k++) {
-            if (bad_value_byte((unsigned char)value.ptr[k])) {
-                *out_status = 400;
-                return -1;
-            }
-        }
-        if (out_h->n >= limit) {
+        if (out_h->n == max_headers || out_h->n == HTTP_MAX_HEADERS) {
             *out_status = 431;
             return -1;
         }
-        out_h->v[out_h->n].name = name;
-        out_h->v[out_h->n].value = value;
-        out_h->n++;
+        out_h->v[out_h->n++] = field;
     }
     return 0;
 }
 
 const http_header_t *http_header_get(const http_headers_t *h, const char *name)
 {
-    for (size_t i = 0; i < h->n; i++) {
-        if (str_eq_ci(h->v[i].name, name)) {
-            return &h->v[i];
+    for (size_t i = 0; i < h->n; ++i) {
+        const http_header_t *field = &h->v[i];
+        if (str_eq_ci(field->name, name)) {
+            return field;
         }
     }
     return NULL;
@@ -135,32 +112,28 @@ const http_header_t *http_header_get(const http_headers_t *h, const char *name)
 
 size_t http_header_count(const http_headers_t *h, const char *name)
 {
-    size_t c = 0;
-
-    for (size_t i = 0; i < h->n; i++) {
+    size_t count = 0;
+    for (size_t i = 0; i < h->n; ++i) {
         if (str_eq_ci(h->v[i].name, name)) {
-            c++;
+            ++count;
         }
     }
-    return c;
+    return count;
 }
 
 bool http_token_valid(str_t s)
 {
-    if (s.len == 0) {
-        return false;
-    }
-    for (size_t i = 0; i < s.len; i++) {
-        if (!is_tchar((unsigned char)s.ptr[i])) {
+    for (size_t i = 0; i < s.len; ++i) {
+        if (!http_token_byte_valid((unsigned char)s.ptr[i])) {
             return false;
         }
     }
-    return true;
+    return s.len != 0;
 }
 
 bool http_is_hop_by_hop(str_t name, const http_headers_t *h)
 {
-    static const char *const fixed[] = {
+    static const char *const connection_fields[] = {
         "Connection",
         "Keep-Alive",
         "Proxy-Connection",
@@ -171,30 +144,21 @@ bool http_is_hop_by_hop(str_t name, const http_headers_t *h)
         "Proxy-Authenticate",
         "Proxy-Authorization",
     };
-
-    for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
-        if (str_eq_ci(name, fixed[i])) {
+    for (size_t i = 0; i < sizeof(connection_fields) / sizeof(*connection_fields); ++i) {
+        if (str_eq_ci(name, connection_fields[i])) {
             return true;
         }
     }
-    if (h == NULL) {
-        return false;
-    }
-    /* Connection 헤더 값에 쉼표로 나열된 이름 */
-    for (size_t i = 0; i < h->n; i++) {
-        str_t v = h->v[i].value;
-        size_t start = 0;
 
-        if (!str_eq_ci(h->v[i].name, "Connection")) {
+    for (size_t i = 0; h != NULL && i < h->n; ++i) {
+        const http_header_t *field = &h->v[i];
+        if (!str_eq_ci(field->name, "Connection")) {
             continue;
         }
-        for (size_t k = 0; v.len > 0 && k <= v.len; k++) {
-            if (k == v.len || v.ptr[k] == ',') {
-                str_t item = {v.ptr + start, k - start};
-                if (str_eq_ci_str(str_trim_ows(item), name)) {
-                    return true;
-                }
-                start = k + 1;
+        for (str_t list = field->value; list.len != 0;) {
+            str_t item = http_pop_list_item(&list);
+            if (item.len != 0 && str_eq_ci_str(name, item)) {
+                return true;
             }
         }
     }
@@ -203,18 +167,18 @@ bool http_is_hop_by_hop(str_t name, const http_headers_t *h)
 
 int http_headers_write(const http_headers_t *h, bool skip_hop_by_hop, buf_t *out)
 {
-    size_t saved = out->len;
-
-    for (size_t i = 0; i < h->n; i++) {
-        const http_header_t *x = &h->v[i];
-
-        if (skip_hop_by_hop && http_is_hop_by_hop(x->name, h)) {
+    const size_t start = out->len;
+    for (size_t i = 0; i < h->n; ++i) {
+        http_header_t field = h->v[i];
+        if (skip_hop_by_hop && http_is_hop_by_hop(field.name, h)) {
             continue;
         }
-        if (buf_append(out, x->name.ptr, x->name.len) != 0 || buf_append(out, ": ", 2) != 0 ||
-            buf_append(out, x->value.ptr, x->value.len) != 0 || buf_append(out, "\r\n", 2) != 0) {
-            out->len = saved;
-            return -1;
+        const str_t parts[] = {field.name, STR_LIT(": "), field.value, STR_LIT("\r\n")};
+        for (size_t part = 0; part < sizeof(parts) / sizeof(*parts); ++part) {
+            if (buf_append(out, parts[part].ptr, parts[part].len) < 0) {
+                out->len = start;
+                return -1;
+            }
         }
     }
     return 0;

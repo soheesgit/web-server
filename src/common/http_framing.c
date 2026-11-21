@@ -1,391 +1,273 @@
-/* src/common/http_framing.c
- *
- * 본문 길이·경계 추적·keep-alive. 명세: http_framing.h
- */
+/* HTTP 메시지 본문 길이, 청크 경계 및 연결 유지 판정. */
 #include "common/http_framing.h"
 
-#include <stdint.h>
-#include <string.h>
-
 #include "common/http_headers.h"
-#include "core/str.h"
+#include "common/internal_http_text.h"
 
-/* 쉼표 목록에서 다음 항목을 꺼낸다. 빈 항목도 호출자가 검사할 수 있게 남긴다. */
-static bool list_item(str_t *rest, str_t *out)
+/* 받은 순서대로 헤더의 목록을 검사하고 일치하는 길이만 받아들인다. */
+static bool read_content_length(str_t list, http_framing_t *framing)
 {
-    const char *comma;
-
-    if (rest->ptr == NULL) {
+    if (list.ptr == NULL) {
         return false;
     }
-    comma = memchr(rest->ptr, ',', rest->len);
-    if (comma == NULL) {
-        *out = str_trim_ows(*rest);
-        *rest = (str_t){0};
-    } else {
-        size_t len = (size_t)(comma - rest->ptr);
-        *out = str_trim_ows((str_t){rest->ptr, len});
-        *rest = (str_t){comma + 1, rest->len - len - 1};
-    }
+    do {
+        uint64_t length;
+        if (str_to_u64(http_pop_list_item(&list), UINT64_MAX, &length) < 0 ||
+            (framing->kind == FRAMING_LENGTH && framing->length != length)) {
+            return false;
+        }
+        *framing = (http_framing_t){FRAMING_LENGTH, length};
+    } while (list.ptr != NULL);
     return true;
 }
 
-/* 모든 Content-Length 값(쉼표 목록 포함)이 같은 10진수인지 확인한다. */
-static int resolve_content_length(const http_headers_t *h, uint64_t *out_len)
+static bool read_transfer_encoding(str_t list, http_framing_t *framing)
 {
-    bool have = false;
-    uint64_t want = 0;
-
-    for (size_t i = 0; i < h->n; i++) {
-        str_t rest = h->v[i].value;
-        str_t item;
-
-        if (!str_eq_ci(h->v[i].name, "Content-Length")) {
-            continue;
-        }
-        if (rest.len == 0) {
-            return -1;
-        }
-        while (list_item(&rest, &item)) {
-            uint64_t v;
-            if (str_to_u64(item, UINT64_MAX, &v) != 0) {
-                return -1;
-            }
-            if (have && v != want) {
-                return -1;
-            }
-            have = true;
-            want = v;
-        }
+    if (list.ptr == NULL) {
+        return false;
     }
-    *out_len = want;
-    return have ? 0 : -1;
-}
-
-/* 받은 순서로 코딩을 검사한다. chunked는 한 번만, 마지막에 허용한다. */
-static bool te_ends_with_chunked(const http_headers_t *h)
-{
-    bool chunked = false;
-
-    for (size_t i = 0; i < h->n; i++) {
-        str_t rest = h->v[i].value;
-        str_t item;
-
-        if (!str_eq_ci(h->v[i].name, "Transfer-Encoding")) {
-            continue;
-        }
-        if (rest.len == 0) {
+    do {
+        str_t coding = http_pop_list_item(&list);
+        if (framing->kind == FRAMING_CHUNKED || !http_token_valid(coding)) {
             return false;
         }
-        while (list_item(&rest, &item)) {
-            if (chunked || !http_token_valid(item)) {
-                return false;
-            }
-            chunked = str_eq_ci(item, "chunked");
+        if (str_eq_ci(coding, "chunked")) {
+            framing->kind = FRAMING_CHUNKED;
         }
-    }
-    return chunked;
+    } while (list.ptr != NULL);
+    return true;
 }
 
 int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
                          http_method_t req_method, http_framing_t *out_f, int *out_status)
 {
-    int err = is_response ? 502 : 400;
-    size_t n_te = http_header_count(h, "Transfer-Encoding");
-    size_t n_cl = http_header_count(h, "Content-Length");
+    http_framing_t framing = {FRAMING_NONE, 0};
+    bool has_encoding = false;
 
-    if (is_response && (req_method == HTTP_HEAD || (status >= 100 && status < 200) ||
-                        status == 204 || status == 304)) {
-        out_f->kind = FRAMING_NONE;
-        out_f->length = 0;
+    if (is_response &&
+        (req_method == HTTP_HEAD || status / 100 == 1 || status == 204 || status == 304)) {
+        *out_f = framing;
         return 0;
     }
-    if (n_te > 0 && n_cl > 0) {
-        *out_status = err; /* request smuggling 방지 */
-        return -1;
-    }
-    if (n_te > 0) {
-        if (!te_ends_with_chunked(h)) {
-            *out_status = err;
-            return -1;
+
+    for (size_t i = 0; i < h->n; ++i) {
+        const http_header_t *field = &h->v[i];
+        if (str_eq_ci(field->name, "Content-Length")) {
+            if (has_encoding || !read_content_length(field->value, &framing)) {
+                goto invalid_framing;
+            }
+        } else if (str_eq_ci(field->name, "Transfer-Encoding")) {
+            if (framing.kind == FRAMING_LENGTH || !read_transfer_encoding(field->value, &framing)) {
+                goto invalid_framing;
+            }
+            has_encoding = true;
         }
-        out_f->kind = FRAMING_CHUNKED;
-        out_f->length = 0;
-        return 0;
     }
-    if (n_cl > 0) {
-        uint64_t len;
-        if (resolve_content_length(h, &len) != 0) {
-            *out_status = err;
-            return -1;
-        }
-        out_f->kind = FRAMING_LENGTH;
-        out_f->length = len;
-        return 0;
+
+    if (has_encoding && framing.kind != FRAMING_CHUNKED) {
+        goto invalid_framing;
     }
-    out_f->kind = is_response ? FRAMING_CLOSE : FRAMING_NONE;
-    out_f->length = 0;
+    if (is_response && framing.kind == FRAMING_NONE) {
+        framing.kind = FRAMING_CLOSE;
+    }
+    *out_f = framing;
     return 0;
+
+invalid_framing:
+    *out_status = is_response ? 502 : 400;
+    return -1;
 }
 
-/* CHUNKED 파서 상태. tracker.state의 하위 8비트 = 단계, 그 위 = 현재 청크 크기 자릿수.
- * remaining은 크기 줄을 읽는 동안 크기를 누적하고, 데이터 단계에서는 남은 데이터 바이트다. */
-enum {
-    CK_SIZE_START, /* 첫 16진 자리 대기 */
-    CK_SIZE,       /* 16진 자리 계속 */
-    CK_EXT_SEP,    /* 청크 확장 앞 공백과 세미콜론 */
-    CK_EXT,        /* chunk-ext: 줄 끝까지 건너뜀 */
-    CK_SIZE_LF,    /* 크기 줄의 CR 뒤 LF 대기 */
-    CK_DATA,       /* 청크 데이터 */
-    CK_DATA_CR,    /* 데이터 뒤 줄 끝 (CR 또는 LF) 대기 */
-    CK_DATA_LF,    /* 데이터 뒤 CR 다음 LF 대기 */
-    CK_TRAILER,    /* 트레일러 줄의 시작 (빈 줄이면 끝) */
-    CK_TRAILER_NAME,
-    CK_TRAILER_VALUE,
-    CK_TRAILER_LF,
-    CK_FINAL_LF, /* 마지막 빈 줄의 CR 뒤 LF 대기 */
-    CK_DONE,
-    CK_ERROR
-};
-#define CK_MAX_DIGITS 16
+bool http_keep_alive(int minor, const http_headers_t *h)
+{
+    bool keep = minor >= 1;
+    for (size_t i = 0; i < h->n; ++i) {
+        const http_header_t *field = &h->v[i];
+        if (!str_eq_ci(field->name, "Connection")) {
+            continue;
+        }
 
-static int hexval(char c)
+        for (str_t list = field->value; list.len != 0;) {
+            str_t token = http_pop_list_item(&list);
+            if (str_eq_ci(token, "close")) {
+                return false;
+            }
+            keep = keep || str_eq_ci(token, "keep-alive");
+        }
+    }
+    return keep;
+}
+
+typedef enum {
+    CHUNK_SIZE,
+    CHUNK_BEFORE_EXTENSION,
+    CHUNK_EXTENSION,
+    CHUNK_SIZE_LF,
+    CHUNK_DATA,
+    CHUNK_DATA_END,
+    CHUNK_DATA_LF,
+    CHUNK_TRAILER_START,
+    CHUNK_TRAILER_NAME,
+    CHUNK_TRAILER_VALUE,
+    CHUNK_TRAILER_LF,
+    CHUNK_END_LF,
+    CHUNK_COMPLETE,
+    CHUNK_INVALID,
+} chunk_phase_t;
+
+enum { CHUNK_MAX_DIGITS = 16, CHUNK_STATE_RADIX = CHUNK_MAX_DIGITS + 1 };
+
+static int hex_digit(unsigned char c)
 {
     if (c >= '0' && c <= '9') {
         return c - '0';
     }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
+    unsigned char lower = c | 0x20;
+    return lower >= 'a' && lower <= 'f' ? lower - 'a' + 10 : -1;
+}
+
+static chunk_phase_t chunk_size_end(uint64_t size)
+{
+    return size != 0 ? CHUNK_DATA : CHUNK_TRAILER_START;
+}
+
+static chunk_phase_t read_chunk_metadata(chunk_phase_t phase, unsigned char c, uint64_t *remaining,
+                                         int *digits)
+{
+    switch (phase) {
+    case CHUNK_SIZE: {
+        int digit = hex_digit(c);
+        if (digit >= 0 && *digits < CHUNK_MAX_DIGITS) {
+            *remaining = (*remaining << 4) | (uint64_t)digit;
+            ++*digits;
+            return CHUNK_SIZE;
+        }
+        if (*digits == 0) {
+            return CHUNK_INVALID;
+        }
+        if (http_is_ows((char)c)) {
+            return CHUNK_BEFORE_EXTENSION;
+        }
+        if (c == ';') {
+            return CHUNK_EXTENSION;
+        }
+        if (c == '\r') {
+            return CHUNK_SIZE_LF;
+        }
+        return c == '\n' ? chunk_size_end(*remaining) : CHUNK_INVALID;
     }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
+    case CHUNK_BEFORE_EXTENSION:
+        if (c == ';') {
+            return CHUNK_EXTENSION;
+        }
+        return http_is_ows((char)c) ? CHUNK_BEFORE_EXTENSION : CHUNK_INVALID;
+    case CHUNK_EXTENSION:
+        if (c == '\r') {
+            return CHUNK_SIZE_LF;
+        }
+        if (c == '\n') {
+            return chunk_size_end(*remaining);
+        }
+        return http_field_byte_valid(c) ? CHUNK_EXTENSION : CHUNK_INVALID;
+    case CHUNK_SIZE_LF:
+        return c == '\n' ? chunk_size_end(*remaining) : CHUNK_INVALID;
+    case CHUNK_DATA_END:
+        if (c == '\r') {
+            return CHUNK_DATA_LF;
+        }
+        /* LF 단독은 공개 추적기 계약에 따라 허용한다. */
+        return c == '\n' ? CHUNK_SIZE : CHUNK_INVALID;
+    case CHUNK_DATA_LF:
+        return c == '\n' ? CHUNK_SIZE : CHUNK_INVALID;
+    case CHUNK_TRAILER_START:
+        if (c == '\r') {
+            return CHUNK_END_LF;
+        }
+        if (c == '\n') {
+            return CHUNK_COMPLETE;
+        }
+        return http_token_byte_valid(c) ? CHUNK_TRAILER_NAME : CHUNK_INVALID;
+    case CHUNK_TRAILER_NAME:
+        if (c == ':') {
+            return CHUNK_TRAILER_VALUE;
+        }
+        return http_token_byte_valid(c) ? CHUNK_TRAILER_NAME : CHUNK_INVALID;
+    case CHUNK_TRAILER_VALUE:
+        if (c == '\r') {
+            return CHUNK_TRAILER_LF;
+        }
+        if (c == '\n') {
+            return CHUNK_TRAILER_START;
+        }
+        return http_field_byte_valid(c) ? CHUNK_TRAILER_VALUE : CHUNK_INVALID;
+    case CHUNK_TRAILER_LF:
+        return c == '\n' ? CHUNK_TRAILER_START : CHUNK_INVALID;
+    case CHUNK_END_LF:
+        return c == '\n' ? CHUNK_COMPLETE : CHUNK_INVALID;
+    default:
+        return CHUNK_INVALID;
     }
-    return -1;
 }
 
-/* 크기 줄이 끝났을 때: 크기가 0이면 트레일러, 아니면 데이터 */
-static int after_size_line(const http_body_tracker_t *t)
+static size_t consume_data(uint64_t *remaining, size_t available)
 {
-    return t->remaining == 0 ? CK_TRAILER : CK_DATA;
+    size_t used = *remaining < available ? (size_t)*remaining : available;
+    *remaining -= used;
+    return used;
 }
 
-static bool valid_field_byte(char c)
+static http_body_result_t track_chunks(http_body_tracker_t *t, const char *p, size_t len,
+                                       size_t *out_used)
 {
-    unsigned char byte = (unsigned char)c;
-    return (byte >= 0x20 || byte == '\t') && byte != 0x7F;
-}
+    /* state에 단계와 크기 줄의 자릿수를 저장한다. */
+    chunk_phase_t phase = (chunk_phase_t)(t->state / CHUNK_STATE_RADIX);
+    int digits = t->state % CHUNK_STATE_RADIX;
+    size_t used = 0;
 
-static http_body_result_t track_chunked(http_body_tracker_t *t, const char *p, size_t len,
-                                        size_t *out_used)
-{
-    int phase = t->state & 0xFF;
-    int digits = t->state >> 8;
-    size_t i = 0;
-
-    while (i < len && phase != CK_DONE && phase != CK_ERROR) {
-        char c = p[i];
-        int v;
-
-        switch (phase) {
-        case CK_SIZE_START:
-        case CK_SIZE:
-            v = hexval(c);
-            if (v >= 0) {
-                if (digits == CK_MAX_DIGITS) {
-                    phase = CK_ERROR;
-                    continue;
-                }
-                t->remaining = t->remaining * 16 + (uint64_t)v;
-                digits++;
-                phase = CK_SIZE;
-            } else if (phase == CK_SIZE && c == ';') {
-                phase = CK_EXT;
-            } else if (phase == CK_SIZE && (c == ' ' || c == '\t')) {
-                phase = CK_EXT_SEP;
-            } else if (phase == CK_SIZE && c == '\r') {
-                phase = CK_SIZE_LF;
-            } else if (phase == CK_SIZE && c == '\n') {
-                phase = after_size_line(t);
-            } else {
-                phase = CK_ERROR;
-                continue;
-            }
-            i++;
-            break;
-        case CK_EXT_SEP:
-            if (c == ';') {
-                phase = CK_EXT;
-            } else if (c != ' ' && c != '\t') {
-                phase = CK_ERROR;
-                continue;
-            }
-            i++;
-            break;
-        case CK_EXT:
-            if (c == '\r') {
-                phase = CK_SIZE_LF;
-            } else if (c == '\n') {
-                phase = after_size_line(t);
-            } else if (!valid_field_byte(c)) {
-                phase = CK_ERROR;
-                continue;
-            }
-            i++;
-            break;
-        case CK_SIZE_LF:
-            if (c != '\n') {
-                phase = CK_ERROR;
-                continue;
-            }
-            phase = after_size_line(t);
-            i++;
-            break;
-        case CK_DATA: {
-            size_t take = len - i;
-            if ((uint64_t)take > t->remaining) {
-                take = (size_t)t->remaining;
-            }
-            t->remaining -= take;
-            i += take;
+    while (used < len && phase != CHUNK_INVALID && phase != CHUNK_COMPLETE) {
+        if (phase == CHUNK_DATA) {
+            used += consume_data(&t->remaining, len - used);
             if (t->remaining == 0) {
-                phase = CK_DATA_CR;
-            }
-            break;
-        }
-        case CK_DATA_CR:
-            if (c == '\r') {
-                phase = CK_DATA_LF;
-            } else if (c == '\n') {
-                phase = CK_SIZE_START;
+                phase = CHUNK_DATA_END;
                 digits = 0;
-            } else {
-                phase = CK_ERROR;
-                continue;
             }
-            i++;
-            break;
-        case CK_DATA_LF:
-            if (c != '\n') {
-                phase = CK_ERROR;
-                continue;
-            }
-            phase = CK_SIZE_START;
-            digits = 0;
-            i++;
-            break;
-        case CK_TRAILER:
-            if (c == '\r') {
-                phase = CK_FINAL_LF;
-            } else if (c == '\n') {
-                phase = CK_DONE;
-            } else if (http_token_valid((str_t){p + i, 1})) {
-                phase = CK_TRAILER_NAME;
-            } else {
-                phase = CK_ERROR;
-                continue;
-            }
-            i++;
-            break;
-        case CK_TRAILER_NAME:
-            if (c == ':') {
-                phase = CK_TRAILER_VALUE;
-            } else if (!http_token_valid((str_t){p + i, 1})) {
-                phase = CK_ERROR;
-                continue;
-            }
-            i++;
-            break;
-        case CK_TRAILER_VALUE:
-            if (c == '\r') {
-                phase = CK_TRAILER_LF;
-            } else if (c == '\n') {
-                phase = CK_TRAILER;
-            } else if (!valid_field_byte(c)) {
-                phase = CK_ERROR;
-                continue;
-            }
-            i++;
-            break;
-        case CK_TRAILER_LF:
-            if (c != '\n') {
-                phase = CK_ERROR;
-                continue;
-            }
-            phase = CK_TRAILER;
-            i++;
-            break;
-        case CK_FINAL_LF:
-            if (c != '\n') {
-                phase = CK_ERROR;
-                continue;
-            }
-            phase = CK_DONE;
-            i++;
-            break;
-        default:
-            phase = CK_ERROR;
-            break;
+            continue;
+        }
+        phase = read_chunk_metadata(phase, (unsigned char)p[used], &t->remaining, &digits);
+        if (phase != CHUNK_INVALID) {
+            ++used;
         }
     }
-    t->state = phase | (digits << 8);
-    *out_used = i;
-    if (phase == CK_ERROR) {
+
+    t->state = phase * CHUNK_STATE_RADIX + digits;
+    *out_used = used;
+    if (phase == CHUNK_INVALID) {
         return BODY_ERROR;
     }
-    return phase == CK_DONE ? BODY_DONE : BODY_MORE;
+    return phase == CHUNK_COMPLETE ? BODY_DONE : BODY_MORE;
 }
 
 void http_body_tracker_init(http_body_tracker_t *t, http_framing_t f)
 {
-    t->f = f;
-    t->remaining = f.kind == FRAMING_LENGTH ? f.length : 0;
-    t->state = CK_SIZE_START;
+    *t = (http_body_tracker_t){.f = f, .remaining = f.kind == FRAMING_LENGTH ? f.length : 0};
 }
 
 http_body_result_t http_body_track(http_body_tracker_t *t, const char *p, size_t len,
                                    size_t *out_used)
 {
-    *out_used = 0;
     switch (t->f.kind) {
-    case FRAMING_NONE:
-        return BODY_DONE;
-    case FRAMING_LENGTH: {
-        size_t take = len;
-        if ((uint64_t)take > t->remaining) {
-            take = (size_t)t->remaining;
-        }
-        t->remaining -= take;
-        *out_used = take;
+    case FRAMING_LENGTH:
+        *out_used = consume_data(&t->remaining, len);
         return t->remaining == 0 ? BODY_DONE : BODY_MORE;
-    }
     case FRAMING_CHUNKED:
-        return track_chunked(t, p, len, out_used);
+        return track_chunks(t, p, len, out_used);
     case FRAMING_CLOSE:
         *out_used = len;
         return BODY_MORE;
+    case FRAMING_NONE:
+        *out_used = 0;
+        return BODY_DONE;
     }
+    *out_used = 0;
     return BODY_ERROR;
-}
-
-bool http_keep_alive(int minor, const http_headers_t *h)
-{
-    bool keep = false;
-
-    for (size_t i = 0; i < h->n; i++) {
-        str_t rest = h->v[i].value;
-        str_t item;
-
-        if (!str_eq_ci(h->v[i].name, "Connection")) {
-            continue;
-        }
-        while (list_item(&rest, &item)) {
-            if (str_eq_ci(item, "close")) {
-                return false;
-            }
-            if (str_eq_ci(item, "keep-alive")) {
-                keep = true;
-            }
-        }
-    }
-    return minor >= 1 || keep;
 }

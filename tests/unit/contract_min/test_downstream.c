@@ -135,6 +135,12 @@ static void t_u_ds_12(void)
     CHECK_EQ_INT(st, 400);
     CHECK_EQ_INT(parse("GET / HTTP/1.0\r\n\r\n", &req, &st), HTTP_PARSE_DONE);
     CHECK_EQ_INT(req.minor, 0);
+    CHECK_EQ_INT(parse("GET HTTP://example.org/a/./b HTTP/1.1\r\nHost: ignored\r\n\r\n", &req, &st),
+                 HTTP_PARSE_DONE);
+    CHECK_STR_EQ(req.host, "example.org");
+    CHECK_EQ_STR(req.path, "/a/b");
+    CHECK_EQ_INT(parse("GET http://example.org HTTP/1.1\r\n\r\n", &req, &st), HTTP_PARSE_DONE);
+    CHECK_EQ_STR(req.path, "/");
 }
 
 static void t_u_ds_22(void)
@@ -160,6 +166,8 @@ static void t_u_ds_27(void)
     char a[] = "/a/./b//c/";
     char b[] = "/a/b/../c";
     char c[] = "/";
+    char d[] = "//a/b/..";
+    char e[] = "/a//./";
 
     CHECK_EQ_INT(path_normalize(a), 0);
     CHECK_EQ_STR(a, "/a/b/c/");
@@ -167,6 +175,10 @@ static void t_u_ds_27(void)
     CHECK_EQ_STR(b, "/a/c");
     CHECK_EQ_INT(path_normalize(c), 0);
     CHECK_EQ_STR(c, "/");
+    CHECK_EQ_INT(path_normalize(d), 0);
+    CHECK_EQ_STR(d, "/a/");
+    CHECK_EQ_INT(path_normalize(e), 0);
+    CHECK_EQ_STR(e, "/a/");
 }
 
 static void t_u_ds_28(void)

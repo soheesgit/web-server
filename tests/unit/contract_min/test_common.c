@@ -37,6 +37,16 @@ static void t_u_com_01(void)
                  HTTP_PARSE_DONE);
     CHECK_EQ_INT(skip, 0);
     CHECK_EQ_INT(head_len, strlen(REQ1));
+
+    const char mixed[] = "\r\n\nGET / HTTP/1.0\n\r\nBODY";
+    const size_t end = sizeof(mixed) - sizeof("BODY");
+    CHECK_EQ_INT(http_find_head_end(mixed, sizeof(mixed) - 1, end, &skip, &head_len, &st),
+                 HTTP_PARSE_DONE);
+    CHECK_EQ_INT(skip, 3);
+    CHECK_EQ_INT(head_len, end);
+    CHECK_EQ_INT(http_find_head_end(mixed, sizeof(mixed) - 1, end - 1, &skip, &head_len, &st),
+                 HTTP_PARSE_ERROR);
+    CHECK_EQ_INT(st, 431);
 }
 
 static void t_u_com_02(void)

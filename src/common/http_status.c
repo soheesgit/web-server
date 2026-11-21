@@ -1,66 +1,42 @@
-/* src/common/http_status.c
- *
- * 사유 문구와 에러 페이지. 명세: http_status.h
- */
+/* HTTP 상태 문구와 공통 오류 응답. */
 #include "common/http_status.h"
-
-#include <stddef.h>
 
 const char *http_reason(int status)
 {
-    switch (status) {
-    case 100:
-        return "Continue";
-    case 200:
-        return "OK";
-    case 201:
-        return "Created";
-    case 204:
-        return "No Content";
-    case 301:
-        return "Moved Permanently";
-    case 302:
-        return "Found";
-    case 304:
-        return "Not Modified";
-    case 400:
-        return "Bad Request";
-    case 403:
-        return "Forbidden";
-    case 404:
-        return "Not Found";
-    case 405:
-        return "Method Not Allowed";
-    case 408:
-        return "Request Timeout";
-    case 413:
-        return "Content Too Large";
-    case 414:
-        return "URI Too Long";
-    case 431:
-        return "Request Header Fields Too Large";
-    case 500:
-        return "Internal Server Error";
-    case 501:
-        return "Not Implemented";
-    case 502:
-        return "Bad Gateway";
-    case 503:
-        return "Service Unavailable";
-    case 504:
-        return "Gateway Timeout";
-    case 505:
-        return "HTTP Version Not Supported";
-    default:
+    static const char *const reasons[506] = {
+        [100] = "Continue",
+        [200] = "OK",
+        [201] = "Created",
+        [204] = "No Content",
+        [301] = "Moved Permanently",
+        [302] = "Found",
+        [304] = "Not Modified",
+        [400] = "Bad Request",
+        [403] = "Forbidden",
+        [404] = "Not Found",
+        [405] = "Method Not Allowed",
+        [408] = "Request Timeout",
+        [413] = "Content Too Large",
+        [414] = "URI Too Long",
+        [431] = "Request Header Fields Too Large",
+        [500] = "Internal Server Error",
+        [501] = "Not Implemented",
+        [502] = "Bad Gateway",
+        [503] = "Service Unavailable",
+        [504] = "Gateway Timeout",
+        [505] = "HTTP Version Not Supported",
+    };
+
+    if (status < 0 || (size_t)status >= sizeof(reasons) / sizeof(*reasons) ||
+        reasons[status] == NULL) {
         return "Unknown";
     }
+    return reasons[status];
 }
 
 int http_error_body(int status, buf_t *out)
 {
     const char *reason = http_reason(status);
-
-    /* buf_appendf는 실패하면 out을 바꾸지 않는다 */
-    return buf_appendf(out, "<!doctype html><title>%03d %s</title><h1>%03d %s</h1>\n", status,
-                       reason, status, reason);
+    const char *format = "<!doctype html><title>%03d %s</title><h1>%03d %s</h1>\n";
+    return buf_appendf(out, format, status, reason, status, reason);
 }

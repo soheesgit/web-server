@@ -1,7 +1,4 @@
-/* src/downstream/uri.c
- *
- * URI 분리·디코딩·정규화. 명세: uri.h
- */
+/* 요청 대상 분리와 정규화. */
 #include "downstream/uri.h"
 
 #include <errno.h>
@@ -9,176 +6,160 @@
 
 int uri_split(str_t target, str_t *out_path, str_t *out_query)
 {
-    const char *hash;
-    const char *q;
-    size_t n;
-
     if (target.len == 0) {
         errno = EINVAL;
         return -1;
     }
-    hash = memchr(target.ptr, '#', target.len);
-    n = hash != NULL ? (size_t)(hash - target.ptr) : target.len;
-    q = memchr(target.ptr, '?', n);
-    if (q == NULL) {
-        out_path->ptr = target.ptr;
-        out_path->len = n;
-        out_query->ptr = NULL;
-        out_query->len = 0;
-        return 0;
+
+    size_t path_end = target.len;
+    size_t query_start = target.len;
+    size_t end = target.len;
+    for (size_t i = 0; i < target.len; ++i) {
+        char c = target.ptr[i];
+        if (c == '#') {
+            end = i;
+            break;
+        }
+        if (c == '?' && path_end == target.len) {
+            path_end = i;
+            query_start = i + 1;
+        }
     }
-    out_path->ptr = target.ptr;
-    out_path->len = (size_t)(q - target.ptr);
-    out_query->ptr = q + 1;
-    out_query->len = n - out_path->len - 1;
+    if (path_end == target.len) {
+        *out_path = (str_t){target.ptr, end};
+        *out_query = (str_t){0};
+    } else {
+        *out_path = (str_t){target.ptr, path_end};
+        *out_query = (str_t){target.ptr + query_start, end - query_start};
+    }
     return 0;
 }
 
 int uri_parse_absolute(str_t target, str_t *out_authority, str_t *out_rest)
 {
-    static const char root[] = "/";
-    const size_t scheme_len = 7; /* "http://" */
-    str_t scheme;
-    size_t i;
+    enum { SCHEME_LEN = sizeof("http://") - 1 };
+    if (target.len <= SCHEME_LEN || !str_eq_ci((str_t){target.ptr, SCHEME_LEN}, "http://")) {
+        errno = EINVAL;
+        return -1;
+    }
 
-    if (target.len < scheme_len) {
+    size_t path = SCHEME_LEN;
+    while (path < target.len && target.ptr[path] != '/') {
+        char c = target.ptr[path];
+        if (c == '@' || c == '?' || c == '#') {
+            errno = EINVAL;
+            return -1;
+        }
+        ++path;
+    }
+    if (path == SCHEME_LEN) {
         errno = EINVAL;
         return -1;
     }
-    scheme.ptr = target.ptr;
-    scheme.len = scheme_len;
-    if (!str_eq_ci(scheme, "http://")) {
-        errno = EINVAL;
-        return -1;
-    }
-    i = scheme_len;
-    while (i < target.len && target.ptr[i] != '/' && target.ptr[i] != '?' && target.ptr[i] != '#') {
-        i++;
-    }
-    if (i == scheme_len || memchr(target.ptr + scheme_len, '@', i - scheme_len) != NULL) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (i < target.len && target.ptr[i] != '/') {
-        errno = EINVAL;
-        return -1;
-    }
-    out_authority->ptr = target.ptr + scheme_len;
-    out_authority->len = i - scheme_len;
-    if (i == target.len) {
-        out_rest->ptr = root;
-        out_rest->len = 1;
-    } else {
-        out_rest->ptr = target.ptr + i;
-        out_rest->len = target.len - i;
-    }
+    *out_authority = (str_t){target.ptr + SCHEME_LEN, path - SCHEME_LEN};
+    *out_rest = path < target.len ? (str_t){target.ptr + path, target.len - path} : STR_LIT("/");
     return 0;
 }
 
-/* 16진 숫자 하나의 값. 16진 숫자가 아니면 -1. */
-static int hex_val(char c)
+static int hex_value(unsigned char c)
 {
-    if (c >= '0' && c <= '9') {
+    if ('0' <= c && c <= '9') {
         return c - '0';
     }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
+    unsigned char lower = c | 0x20;
+    if ('a' <= lower && lower <= 'f') {
+        return lower - 'a' + 10;
     }
     return -1;
 }
 
 int uri_decode_path(str_t in, char *out, size_t cap, size_t *out_len)
 {
-    size_t w = 0;
+    size_t written = 0;
 
-    for (size_t r = 0; r < in.len; r++) {
-        char c = in.ptr[r];
-
+    for (size_t cursor = 0; cursor < in.len;) {
+        unsigned char c = (unsigned char)in.ptr[cursor++];
         if (c == '%') {
-            int hi;
-            int lo;
-
-            if (in.len - r < 3) {
+            if (in.len - cursor < 2) {
                 errno = EINVAL;
                 return -1;
             }
-            hi = hex_val(in.ptr[r + 1]);
-            lo = hex_val(in.ptr[r + 2]);
-            if (hi < 0 || lo < 0) {
+            int high = hex_value((unsigned char)in.ptr[cursor]);
+            int low = hex_value((unsigned char)in.ptr[cursor + 1]);
+            if (high < 0 || low < 0) {
                 errno = EINVAL;
                 return -1;
             }
-            c = (char)(hi * 16 + lo);
-            r += 2;
+            c = (unsigned char)(high << 4 | low);
+            cursor += 2;
         }
-        if (c == '\0') {
+        if (c == 0) {
             errno = EINVAL;
             return -1;
         }
-        if (w + 1 >= cap) {
+        if (cap == 0 || written == cap - 1) {
             errno = ENAMETOOLONG;
             return -1;
         }
-        out[w++] = c;
+        out[written++] = (char)c;
     }
-    if (w >= cap) {
+    if (cap == 0) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    out[w] = '\0';
+    out[written] = '\0';
     if (out_len != NULL) {
-        *out_len = w;
+        *out_len = written;
     }
     return 0;
 }
 
 int path_normalize(char *path)
 {
-    size_t r = 0;
-    size_t w = 1; /* path[0..w)는 결과. 항상 '/'로 끝난다 */
-
-    if (path[0] != '/') {
+    if (*path != '/') {
         errno = EINVAL;
         return -1;
     }
-    while (path[r] != '\0') {
-        size_t start;
-        size_t n;
 
-        while (path[r] == '/') {
-            r++;
+    const size_t len = strlen(path);
+    size_t used = 1;
+    bool trailing_slash = false;
+    for (size_t cursor = 1; cursor < len;) {
+        size_t start = cursor;
+        while (cursor < len && path[cursor] != '/') {
+            ++cursor;
         }
-        if (path[r] == '\0') {
-            break;
-        }
-        start = r;
-        while (path[r] != '\0' && path[r] != '/') {
-            r++;
-        }
-        n = r - start;
-        if (n == 1 && path[start] == '.') {
-            continue;
-        }
-        if (n == 2 && path[start] == '.' && path[start + 1] == '.') {
-            if (w == 1) {
+        size_t width = cursor - start;
+        bool dot = width == 1 && path[start] == '.';
+        bool parent = width == 2 && path[start] == '.' && path[start + 1] == '.';
+        trailing_slash = cursor < len || dot || parent;
+
+        if (parent) {
+            if (used == 1) {
                 errno = EPERM;
                 return -1;
             }
-            w--; /* 끝의 '/' */
-            while (path[w - 1] != '/') {
-                w--;
+            while (used > 1 && path[used - 1] != '/') {
+                --used;
             }
-            continue;
+            if (used > 1) {
+                --used;
+            }
+        } else if (width != 0 && !dot) {
+            if (used > 1) {
+                path[used++] = '/';
+            }
+            memmove(path + used, path + start, width);
+            used += width;
         }
-        memmove(path + w, path + start, n);
-        w += n;
-        if (path[r] == '/') {
-            path[w++] = '/';
+
+        if (cursor < len) {
+            ++cursor;
         }
     }
-    path[w] = '\0';
+    if (trailing_slash && used > 1) {
+        path[used++] = '/';
+    }
+    path[used] = '\0';
     return 0;
 }
