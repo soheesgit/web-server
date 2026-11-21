@@ -23,8 +23,9 @@ void test_fail(const char *file, int line, const char *fmt, ...)
 /* 현재 테스트를 건너뛴다 (예: root 권한). 돌아오지 않는다. */
 void test_skip(const char *reason) __attribute__((noreturn));
 
-/* mkdtemp로 임시 디렉토리를 만들어 경로를 돌려준다 (정적 버퍼 아님, 프로세스 끝까지 유효).
- * 실패하면 NULL. 테스트는 fork된 자식에서 돌므로 정리하지 않아도 된다. */
+/* mkdtemp로 임시 디렉토리를 만들어 경로를 돌려준다 (내부 정적 표, 프로세스 끝까지 유효,
+ * 테스트 하나에서 최대 8번). 실패하면 NULL. 테스트는 fork된 자식에서 돌므로 정리하지 않아도
+ * 된다. */
 const char *test_tmpdir(void);
 
 /* dir/name 파일에 data를 쓴다. 0 성공, -1 실패. */
