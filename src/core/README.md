@@ -38,6 +38,6 @@
 1단계 (`core` + `common`). 분담: A `str`, `buf` · B `config`, `log` · C `platform`.
 - [x] str
 - [x] buf
-- [ ] config
+- [x] config
 - [x] log
 - [x] platform
