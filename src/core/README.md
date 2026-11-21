@@ -40,4 +40,4 @@
 - [x] buf
 - [ ] config
 - [ ] log
-- [ ] platform
+- [x] platform

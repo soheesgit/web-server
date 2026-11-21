@@ -4,9 +4,6 @@
 # --- U-CORE --- 계약 최소셋: core
 U-CORE-17
 U-CORE-21
-U-CORE-28
-U-CORE-29
-U-CORE-30
 
 # --- U-COM --- 계약 최소셋: common
 
