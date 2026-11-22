@@ -291,3 +291,19 @@
 - 결정: 중계하는 원본 바이트에 앞선 전송 코딩이 남아 있다면, 변환을 지원하기 전까지 프록시가 해당 응답을 헤더 송신 전에 502로 처리하도록 합의한다. HTTP/1.0으로 chunked 응답을 중계할 때는 청크 프레이밍을 제거한 바이트만 전송한다.
 - 대안: 원래의 전송 코딩 목록을 보존하거나 각 코딩을 해제한 다음 본문을 다시 프레이밍한다.
 - 영향: `handler/handler.h`, `handler/proxy.c`, `downstream/response_writer.h`, E-PX-05, E-PX-16.
+
+## D-036 listener의 원자적 cloexec 설정
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: listener 계약은 Linux에서 accept4를 지정하고 전역 규약은 OS별 API를 core/platform에 둔다. 현재 core에는 accept 래퍼가 없다.
+- 결정: Linux의 원자적 accept를 core/platform에 둘지 합의한다. 현 구현은 POSIX accept 직후 fcntl로 FD_CLOEXEC를 설정한다. 동시에 다른 워커가 fork할 때는 그 사이의 fd 상속을 막기 위해 원자적 accept가 필요하다.
+- 대안: listener에서 Linux 분기를 허용한다.
+- 영향: `core/platform.h`, `downstream/listener.h`, `downstream/listener.c`, U-DS-36, U-DS-38.
+
+## D-037 v1 송신 정체 및 서버 종료 전달
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: v1은 대기 상한을 확인해야 하지만 송신 정체 전용 한도와 연결에 서버 종료를 알리는 값이 공개 계약에 없다.
+- 결정: 별도 설정이 합의되기 전까지 다운스트림 송신 정체에 body_timeout_ms를, 업스트림 본문 읽기 정체에 upstream_response_timeout_ms를 적용한다. 서버 종료 여부는 app과 engine의 종료 계약을 먼저 정한다.
+- 대안: 전송별 설정과 연결 종료 통지를 공개 인터페이스에 추가한다.
+- 영향: `downstream/conn.h`, `core/config.h`, `engine/engine.h`, E-SL-02, E-SL-04.

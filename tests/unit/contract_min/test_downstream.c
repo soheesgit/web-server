@@ -215,6 +215,35 @@ static void t_u_ds_30(void)
     CHECK_EQ_INT(response_write_head(&head, 1, (time_t)1700000000, &out), 0);
     CHECK_EQ_MEM(out.data, out.len, want, strlen(want));
     buf_cleanup(&out);
+
+    const char chunked[] = "Transfer-Encoding: chunked\r\n\r\n";
+    const char close[] = "Connection: close\r\n\r\n";
+    CHECK_EQ_INT(buf_init(&out, 0, 8192), 0);
+    head.framing.kind = FRAMING_CHUNKED;
+    CHECK_EQ_INT(response_write_head(&head, 1, (time_t)1700000000, &out), 0);
+    CHECK(out.len >= sizeof(chunked) - 1);
+    CHECK_EQ_MEM(out.data + out.len - (sizeof(chunked) - 1), sizeof(chunked) - 1, chunked,
+                 sizeof(chunked) - 1);
+    buf_reset(&out);
+    CHECK_EQ_INT(response_write_head(&head, 0, (time_t)1700000000, &out), 0);
+    CHECK_EQ_INT(out.len, strlen(want) - strlen("Content-Length: 5\r\n\r\n") + sizeof(close) - 1);
+    CHECK_EQ_MEM(out.data + out.len - (sizeof(close) - 1), sizeof(close) - 1, close,
+                 sizeof(close) - 1);
+    buf_reset(&out);
+    const char binary_chunk[] = "3\r\na\0b\r\n0\r\n\r\n";
+    CHECK_EQ_INT(response_write_chunk(NULL, 0, &out), 0);
+    CHECK_EQ_INT(response_write_chunk("a\0b", 3, &out), 0);
+    CHECK_EQ_INT(response_write_last_chunk(&out), 0);
+    CHECK_EQ_MEM(out.data, out.len, binary_chunk, sizeof(binary_chunk) - 1);
+    buf_cleanup(&out);
+
+    CHECK_EQ_INT(buf_init(&out, 0, 5), 0);
+    CHECK_EQ_INT(buf_append(&out, "x", 1), 0);
+    CHECK_EQ_INT(response_write_chunk("a\0b", 3, &out), -1);
+    CHECK_EQ_MEM(out.data, out.len, "x", 1);
+    CHECK_EQ_INT(response_write_head(&head, 1, (time_t)1700000000, &out), -1);
+    CHECK_EQ_MEM(out.data, out.len, "x", 1);
+    buf_cleanup(&out);
     buf_cleanup(&head.fields);
 }
 
@@ -234,7 +263,27 @@ static void t_u_ds_36(void)
     CHECK(listener_port(fd) > 0);
     CHECK_EQ_INT(getsockname(fd, (struct sockaddr *)&sa, &sl), 0);
     CHECK_EQ_INT(ntohs(sa.sin_port), listener_port(fd));
+    int accepted = -1;
+    CHECK_EQ_INT(listener_accept(fd, &accepted, NULL), -1);
+    CHECK(errno == EAGAIN || errno == EWOULDBLOCK);
+    CHECK_EQ_INT(accepted, -1);
+
+    int client = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(client >= 0);
+    CHECK_EQ_INT(connect(client, (struct sockaddr *)&sa, sl), 0);
+    struct pollfd ready = {.fd = fd, .events = POLLIN};
+    CHECK_EQ_INT(poll(&ready, 1, 1500), 1);
+    CHECK((ready.revents & POLLIN) != 0);
+    struct sockaddr_storage peer;
+    CHECK_EQ_INT(listener_accept(fd, &accepted, &peer), 0);
+    CHECK_EQ_INT(peer.ss_family, AF_INET);
+    CHECK((fcntl(accepted, F_GETFD) & FD_CLOEXEC) != 0);
+    close(accepted);
+    close(client);
+
+    errno = EBUSY;
     listener_close(fd);
+    CHECK_EQ_INT(errno, EBUSY);
 }
 
 /* ── conn 공통 ─────────────────────────────────────────────────────────── */
