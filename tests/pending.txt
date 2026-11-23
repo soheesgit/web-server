@@ -19,17 +19,8 @@ U-DS-40
 U-DS-44
 
 # --- U-RT --- 계약 최소셋: router
-U-RT-02
-U-RT-03
 
 # --- U-HD --- 계약 최소셋: handler (plan·static·cgi)
-U-HD-02
-U-HD-04
-U-HD-09
-U-HD-11
-U-HD-14
-U-HD-21
-U-HD-26
 
 # --- U-PX --- 계약 최소셋: handler (proxy)
 U-PX-01
@@ -45,9 +36,6 @@ U-US-17
 U-US-24
 
 # --- U-EN --- 계약 최소셋: engine
-U-EN-01
-U-EN-02
-U-EN-05
 
 # --- E-ST --- 기능: 정적 파일 (E-ST-12는 선택, D-006)
 E-ST-01
@@ -126,6 +114,5 @@ E-SL-03
 E-SL-04
 
 # --- E-CF --- 기능: 설정·실행 (E-CF-01은 initial commit에서 이미 통과해 넣지 않음, D-007)
-E-CF-02
 E-CF-03
 E-CF-04
