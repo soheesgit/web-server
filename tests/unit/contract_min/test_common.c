@@ -8,6 +8,7 @@
 
 #include "common/http_framing.h"
 #include "common/http_headers.h"
+#include "common/http_status.h"
 #include "common/types.h"
 
 /* str_from_cstr(스텁일 수 있음)에 기대지 않고 헤더를 직접 채운다. */
@@ -168,6 +169,15 @@ static void t_u_com_21(void)
     CHECK_EQ_INT(f.kind, FRAMING_CHUNKED);
     h.v[0].value = S("gzip,,chunked");
     CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), -1);
+    h.v[0].value = S("example; level=1; note=\"a,b\", chunked");
+    CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), 0);
+    CHECK_EQ_INT(f.kind, FRAMING_CHUNKED);
+    h.v[0].value = S("example; note=\"open, chunked");
+    CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), -1);
+    CHECK_EQ_INT(st, 502);
+    h.v[0].value = S("chunked; level=1");
+    CHECK_EQ_INT(http_resolve_framing(&h, true, 200, HTTP_GET, &f, &st), -1);
+    CHECK_EQ_INT(st, 502);
 }
 
 static void t_u_com_26(void)
@@ -214,11 +224,9 @@ static void t_u_com_32(void)
 
 static void t_u_com_33(void)
 {
-    static const char msg[] = "3;tag=x\r\na\0b\r\n0\r\nX-Trace: ok\r\n\r\nNEXT";
+    static const char msg[] = "3;tag=x;note=\"a,b\\\"c\"\r\na\0b\r\n0\r\nX-Trace: ok\r\n\r\nNEXT";
     static const char *const bad[] = {
-        "10000000000000000\r\n",
-        "1\r\na\rX",
-        "1 junk\r\n",
+        "10000000000000000\r\n", "1\r\na\rX", "1 junk\r\n", "1;\r\n", "1;tag=\r\n",
         "0\r\nNo-Colon\r\n\r\n",
     };
     const size_t body_len = sizeof(msg) - sizeof("NEXT");
@@ -295,6 +303,56 @@ static void t_u_com_40(void)
     buf_cleanup(&out);
 }
 
+static void t_u_com_42(void)
+{
+    http_headers_t h = {0};
+    buf_t out;
+    const char expected[] = "x-One: a\r\nX-One: b\r\nEmpty: \r\n";
+
+    add_hdr(&h, "x-One", "a");
+    add_hdr(&h, "X-One", "b");
+    add_hdr(&h, "Empty", "");
+    CHECK_EQ_INT(buf_init(&out, 0, 128), 0);
+    CHECK_EQ_INT(http_headers_write(&h, false, &out), 0);
+    CHECK_EQ_MEM(out.data, out.len, expected, sizeof(expected) - 1);
+    buf_cleanup(&out);
+}
+
+static void t_u_com_43(void)
+{
+    http_headers_t h = {0};
+    buf_t out;
+    const char expected[] = "prefix";
+
+    add_hdr(&h, "A", "1");
+    add_hdr(&h, "B", "12345");
+    CHECK_EQ_INT(buf_init(&out, 0, 20), 0);
+    CHECK_EQ_INT(buf_append(&out, expected, sizeof(expected) - 1), 0);
+    CHECK_EQ_INT(http_headers_write(&h, false, &out), -1);
+    CHECK_EQ_MEM(out.data, out.len, expected, sizeof(expected) - 1);
+    buf_cleanup(&out);
+}
+
+static void t_u_com_44(void)
+{
+    CHECK_EQ_STR(http_reason(200), "OK");
+    CHECK_EQ_STR(http_reason(431), "Request Header Fields Too Large");
+    CHECK_EQ_STR(http_reason(599), "Unknown");
+    CHECK_EQ_STR(http_reason(-1), "Unknown");
+}
+
+static void t_u_com_45(void)
+{
+    buf_t out;
+    const char expected[] = "<!doctype html><title>404 Not Found</title><h1>404 Not Found</h1>\n";
+    CHECK_EQ_INT(buf_init(&out, 0, sizeof(expected) - 1), 0);
+    CHECK_EQ_INT(http_error_body(404, &out), 0);
+    CHECK_EQ_MEM(out.data, out.len, expected, sizeof(expected) - 1);
+    CHECK_EQ_INT(http_error_body(500, &out), -1);
+    CHECK_EQ_MEM(out.data, out.len, expected, sizeof(expected) - 1);
+    buf_cleanup(&out);
+}
+
 void register_common_tests(void)
 {
     test_register("U-COM-01", "http_find_head_end: whole request at once", t_u_com_01);
@@ -310,4 +368,8 @@ void register_common_tests(void)
     test_register("U-COM-33", "http_body_track: fragmented chunked body", t_u_com_33);
     test_register("U-COM-38", "http_keep_alive: HTTP/1.1 Connection variants", t_u_com_38);
     test_register("U-COM-40", "http_is_hop_by_hop: fixed list, mixed case", t_u_com_40);
+    test_register("U-COM-42", "http_headers_write: header order and original casing", t_u_com_42);
+    test_register("U-COM-43", "http_headers_write: rollback on short buffer", t_u_com_43);
+    test_register("U-COM-44", "http_reason: known and unknown status codes", t_u_com_44);
+    test_register("U-COM-45", "http_error_body: HTML format and buffer limit", t_u_com_45);
 }
