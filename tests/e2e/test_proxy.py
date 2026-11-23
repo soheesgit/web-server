@@ -205,3 +205,20 @@ def _():
         res = stream_get(s.port, "/api/big", limit=1 << 20)
         expect_eq(res["status"], 200, "status")
         expect_eq(request(s.port, "GET", "/index.html").status, 200, "proxy alive")
+
+
+# E-FW-01은 기획서 밖의 포워드 프록시(D-041)를 확인한다. 기획서 표에 없는 ID다.
+@test("E-FW-01", "forward proxy: absolute-form GET reaches the named host")
+def _():
+    with backends(Backend("echo")) as (b,), Server(conf="forward.conf", fd_slack=8) as s:
+        e = echoed(request(s.port, "GET", f"http://{b.addr}/hello?x=1"))
+        expect_eq(e["target"], "/hello?x=1", "origin-form target at the destination")
+        hosts = [v for k, v in e["headers"] if k.lower() == "host"]
+        expect_eq(hosts, [b.addr], "Host at the destination")
+        # 같은 목적지는 keep-alive 풀을 함께 쓴다: 두 번째도 같은 백엔드가 받는다
+        expect_eq(echoed(request(s.port, "GET", f"http://{b.addr}/again"))["target"], "/again",
+                  "second request")
+        # 목적지가 없는 origin-form 요청은 포워드할 수 없다
+        expect_eq(request(s.port, "GET", "/hello").status, 400, "origin-form status")
+        # 닫힌 포트로 가는 요청은 502 (다른 목적지로 재시도하지 않는다)
+        expect_eq(request(s.port, "GET", "http://127.0.0.1:1/x").status, 502, "dead destination")
