@@ -18,7 +18,10 @@
 void plan_init(response_plan_t *p)
 {
     memset(p, 0, sizeof(*p));
-    /* BODY_NONE일 때는 자원을 소유하지 않는다. fd와 마감 값만 비워 둔다. */
+    /*
+     * 본문 멤버들은 같은 union 저장 공간을 쓴다. BODY_NONE에는 소유한 자원이 없으므로
+     * 여기서는 fd와 마감의 초기값을 기록하고, 실제 본문 멤버는 종류가 정해질 때 채운다(D-032).
+     */
     p->body.pipe.out_fd = -1;
     p->body.pipe.in_fd = -1;
     p->body.pipe.deadline_ms = -1;
@@ -30,6 +33,7 @@ int plan_set_mem(response_plan_t *p, int status, const char *content_type, const
     response_plan_t next;
     int result = -1;
 
+    /* body가 기존 계획의 버퍼를 가리킬 수 있어 사본을 만든 뒤 기존 계획을 정리한다. */
     plan_init(&next);
     if (status < 100 || status > 599) {
         errno = EINVAL;
@@ -56,6 +60,7 @@ int plan_set_mem(response_plan_t *p, int status, const char *content_type, const
 
 int plan_error(response_plan_t *p, int status)
 {
+    /* 응답을 에러 계획으로 바꿔도 이미 내려진 연결 종료 결정은 이어받는다. */
     bool close_after = p->head.close;
 
     plan_cleanup(p);
@@ -84,6 +89,10 @@ int plan_add_header(response_plan_t *p, const char *name, const char *value)
     str_t field = str_from_cstr(name);
     buf_t *fields = &p->head.fields;
 
+    /*
+     * 이름과 값이 헤더 한 줄 안에 머물도록 검사한다. 날짜·길이·연결·서버 식별 헤더의
+     * 직렬화는 응답 writer가 담당하므로 여기서 추가하면 중복될 수 있다.
+     */
     if (!http_token_valid(field) || strpbrk(value, "\r\n") != NULL || str_eq_ci(field, "Date") ||
         str_eq_ci(field, "Server") || str_eq_ci(field, "Content-Length") ||
         str_eq_ci(field, "Connection") || str_eq_ci(field, "Transfer-Encoding")) {
@@ -94,6 +103,7 @@ int plan_add_header(response_plan_t *p, const char *name, const char *value)
         return buf_appendf(fields, "%s: %s\r\n", name, value);
     }
 
+    /* 첫 줄까지 성공한 뒤 버퍼를 넘겨, 실패하면 처음의 빈 fields 상태를 유지한다. */
     buf_t first;
     if (buf_init(&first, 256, 64 * 1024) < 0) {
         return -1;
@@ -110,6 +120,10 @@ static void reap_child(pid_t pid)
 {
     pid_t got;
 
+    /*
+     * 이미 끝난 자식은 즉시 회수한다. 아직 실행 중인 자식만 종료한 뒤 기다리며,
+     * 신호가 waitpid를 중단하면 재시도해 좀비가 남지 않게 한다.
+     */
     do {
         got = waitpid(pid, NULL, WNOHANG);
     } while (got < 0 && errno == EINTR);
@@ -128,6 +142,7 @@ void plan_cleanup(response_plan_t *p)
     if (p == NULL) {
         return;
     }
+    /* kind로 선택된 본문 멤버만 자원을 소유한다. 응답 헤더 버퍼는 본문과 따로 정리한다. */
     switch (p->kind) {
     case BODY_MEM:
         buf_cleanup(&p->body.mem.data);
@@ -150,6 +165,7 @@ void plan_cleanup(response_plan_t *p)
         buf_cleanup(&p->body.pipe.in_data);
         break;
     case BODY_UPSTREAM:
+        /* 중계가 끝난 연결은 호출자가 이미 반납한다. 남은 연결은 재사용 없이 반납한다. */
         if (p->body.upstream.conn != NULL) {
             upstream_release(p->body.upstream.conn, false);
         }
@@ -166,6 +182,7 @@ handler_result_t handler_dispatch(const http_request_t *req, const route_t *rt,
                                   const handler_ctx_t *ctx, proxy_job_t *out_job,
                                   response_plan_t *out_plan)
 {
+    /* 라우터가 고른 종류를 처리기에 넘긴다. 파일과 CGI의 세부 처리는 각 처리기가 맡는다. */
     switch (rt->kind) {
     case ROUTE_STATIC:
         return static_handle(req, rt, ctx, out_plan);

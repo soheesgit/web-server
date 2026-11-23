@@ -17,6 +17,7 @@
 
 static int format_http_date(const struct tm *date, char out[HTTP_DATE_SIZE])
 {
+    /* HTTP 날짜의 요일과 월 이름은 프로세스 로케일과 관계없이 영문 약어로 보낸다. */
     static const char *const weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
     static const char *const months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
@@ -28,6 +29,10 @@ static int format_http_date(const struct tm *date, char out[HTTP_DATE_SIZE])
 
 static uint64_t http_date_key(const struct tm *date)
 {
+    /*
+     * 연·월·일·시·분·초 순서로 비교할 수 있는 정렬 키다. 각 달에 31일 자리를
+     * 배정하므로 실제 경과 초를 계산하거나 시스템 시간대로 변환할 필요가 없다.
+     */
     uint64_t days = ((uint64_t)(date->tm_year + 1900) * 12 + (unsigned)date->tm_mon) * 31 +
                     (unsigned)date->tm_mday;
     return ((days * 24 + (unsigned)date->tm_hour) * 60 + (unsigned)date->tm_min) * 60 +
@@ -46,6 +51,10 @@ static bool not_modified(const http_request_t *req, const struct tm *modified)
         str_to_cstr(since->value, date, sizeof(date)) < 0) {
         return false;
     }
+    /*
+     * 파싱한 값을 다시 IMF-fixdate로 써서 자릿수와 구분자를 확인한다.
+     * 이어서 윤년을 반영해 해당 월에 실제로 존재하는 날짜인지 검사한다.
+     */
     const char *end = strptime(date, "%a, %d %b %Y %H:%M:%S GMT", &parsed);
     if (end != date + sizeof(date) - 1 ||
         format_http_date(&parsed, canonical) != (int)sizeof(canonical) - 1 ||
@@ -66,6 +75,10 @@ static int open_static(const char *root, str_t relative, struct stat *out_st, in
     if (status != 0) {
         return status;
     }
+    /*
+     * FIFO의 상대가 없어도 open이 대기하지 않게 한다. 마지막 경로 요소의 심볼릭
+     * 링크를 따라가지 않으며, 열린 fd를 fstat해 실제 파일 종류를 확인한다.
+     */
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
     if (fd < 0) {
         if (errno == ENXIO || errno == ENODEV) {
@@ -87,6 +100,10 @@ static int redirect_directory(const http_request_t *req, response_plan_t *plan)
     char escaped[3 * HTTP_PATH_MAX];
     size_t n = 0;
 
+    /*
+     * 정규화 경로에는 디코딩된 '?'나 '#'이 들어 있을 수 있다. 경로의 해당 바이트는
+     * 다시 인코딩하고, 리다이렉트 URL에는 원래 쿼리를 경로 뒤에 붙인다.
+     */
     for (const unsigned char *p = (const unsigned char *)req->path; *p != '\0'; p++) {
         unsigned char c = *p;
         if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
@@ -133,6 +150,7 @@ static int serve_static(const http_request_t *req, const route_t *rt, response_p
     if (realpath(rt->root, root) == NULL) {
         return handler_path_status(errno);
     }
+    /* 예를 들어 접두사 /assets/에 매칭된 /assets/logo.png는 루트 아래 logo.png에 대응한다. */
     const char *relative = req->path + rt->prefix_len;
     if (*relative == '/') {
         relative++;
@@ -146,6 +164,10 @@ static int serve_static(const http_request_t *req, const route_t *rt, response_p
         if (req->path[strlen(req->path) - 1] != '/') {
             return redirect_directory(req, plan) == 0 ? 0 : 500;
         }
+        /*
+         * 인덱스 자체가 심볼릭 링크일 수 있어 루트 경계를 다시 확인한다.
+         * 디렉토리에 인덱스가 없으면 목록을 제공할 수 없으므로 403으로 응답한다.
+         */
         (void)snprintf(index_path, sizeof(index_path), "%sindex.html", relative);
         relative = index_path;
         status = open_static(root, (str_t){relative, strlen(relative)}, &st, &fd);
@@ -171,6 +193,7 @@ static int serve_static(const http_request_t *req, const route_t *rt, response_p
         (void)close(fd);
         return 500;
     }
+    /* 클라이언트가 가진 사본을 재사용할 수 있으면 fd를 닫고 304 헤더만 돌려준다. */
     if (unchanged) {
         (void)close(fd);
         plan->head.status = 304;
@@ -182,6 +205,10 @@ static int serve_static(const http_request_t *req, const route_t *rt, response_p
         return 500;
     }
 
+    /*
+     * 파일을 읽지 않고 fd와 크기를 응답 계획으로 이전한다. GET과 HEAD가 같은 메타데이터를
+     * 쓰며, 실제 본문을 보낼지는 연결 처리기가 결정한다.
+     */
     plan->kind = BODY_FILE;
     plan->head.status = 200;
     plan->head.framing = (http_framing_t){FRAMING_LENGTH, (uint64_t)st.st_size};

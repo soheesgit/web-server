@@ -33,10 +33,12 @@ const char *mime_for_path(const char *path)
         {"mp4", "video/mp4"},
         {"gz", "application/gzip"},
     };
+    /* 디렉토리 이름의 점은 건너뛰고 파일 이름의 마지막 점을 찾는다. */
     const char *slash = strrchr(path, '/');
     const char *name = slash == NULL ? path : slash + 1;
     const char *dot = strrchr(name, '.');
 
+    /* .profile의 첫 점은 숨김 파일 표시다. x.tar.gz의 확장자는 gz다. */
     if (dot != NULL && dot != name) {
         str_t extension = str_from_cstr(dot + 1);
         for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) {

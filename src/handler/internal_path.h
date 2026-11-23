@@ -42,9 +42,14 @@ static inline int handler_resolve_path(const char *root, str_t relative, char *o
     if (n < 0 || (size_t)n >= sizeof(candidate)) {
         return 500;
     }
+    /* 링크가 가리키는 대상까지 해석한 실경로를 검사한다. */
     if (realpath(candidate, out_path) == NULL) {
         return handler_path_status(errno);
     }
+    /*
+     * 루트와 완전히 같거나 루트 뒤에 '/'가 이어져야 한다. 예를 들어 /www의
+     * 형제인 /www-backup은 거부한다. 루트 자체가 '/'이면 모든 절대 경로가 그 아래다.
+     */
     if (root_len != 1 && (strncmp(root, out_path, root_len) != 0 ||
                           (out_path[root_len] != '\0' && out_path[root_len] != '/'))) {
         return 403;

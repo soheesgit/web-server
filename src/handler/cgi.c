@@ -14,12 +14,16 @@
 #include "handler/internal_path.h"
 #include "handler/plan.h"
 
+/* 요청 헤더별 항목과 최대 13개의 CGI 변수, execve용 마지막 NULL을 담는다. */
 typedef struct {
     char *vars[HTTP_MAX_HEADERS + 14];
     size_t count;
 } cgi_env_t;
 
-/* pipe 생성부터 CLOEXEC 설정까지 다른 CGI fork가 끼어들지 못하게 한다. */
+/*
+ * pipe 생성과 CLOEXEC 설정이 별도 호출이므로 두 작업 사이에 다른 CGI fork가
+ * 끼어들면 새 fd가 그 자식에 상속될 수 있다. 생성부터 fork까지 같은 락으로 보호한다.
+ */
 static pthread_mutex_t cgi_fork_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static str_t server_name(str_t host)
@@ -27,6 +31,7 @@ static str_t server_name(str_t host)
     if (host.len == 0) {
         return host;
     }
+    /* SERVER_NAME에는 포트를 빼고 전달한다. IPv6 주소의 내부 콜론은 유지한다. */
     if (host.ptr[0] == '[') {
         const char *end = memchr(host.ptr, ']', host.len);
         if (end != NULL && (size_t)(end - host.ptr + 1) < host.len && end[1] == ':') {
@@ -50,6 +55,10 @@ static void env_cleanup(cgi_env_t *env)
 
 static int env_add(cgi_env_t *env, str_t name, str_t value, bool header)
 {
+    /*
+     * 요청 버퍼를 빌린 이름과 값을 NUL 종료된 NAME=value 사본으로 만든다.
+     * 헤더 이름만 CGI의 HTTP_ 대문자 표기로 변환하고 값은 바이트 그대로 복사한다.
+     */
     size_t prefix_len = header ? sizeof("HTTP_") - 1 : 0;
     if (name.len > SIZE_MAX - prefix_len - 2 || value.len > SIZE_MAX - prefix_len - name.len - 2 ||
         env->count >= sizeof(env->vars) / sizeof(env->vars[0]) - 1) {
@@ -93,6 +102,10 @@ static int build_env(const http_request_t *req, const handler_ctx_t *ctx, str_t 
     (void)snprintf(protocol, sizeof(protocol), "HTTP/1.%d", req->minor);
     (void)snprintf(port, sizeof(port), "%u", (unsigned)ctx->server_port);
     (void)snprintf(length, sizeof(length), "%zu", req->body.len);
+    /*
+     * 서버 환경에서 변수를 복사하지 않고 execve에 넘길 환경을 요청마다 구성한다.
+     * QUERY_STRING은 파싱 전 인코딩을 보존한다.
+     */
     const http_header_t values[] = {
         {STR_LIT("GATEWAY_INTERFACE"), STR_LIT("CGI/1.1")},
         {STR_LIT("SERVER_SOFTWARE"), STR_LIT("httpd/0.1")},
@@ -120,6 +133,10 @@ static int build_env(const http_request_t *req, const handler_ctx_t *ctx, str_t 
     if (type != NULL && env_add(out, STR_LIT("CONTENT_TYPE"), type->value, false) < 0) {
         return -1;
     }
+    /*
+     * Content-Type과 Content-Length에는 전용 CGI 변수가 있다.
+     * Proxy 요청 헤더는 자식의 HTTP_PROXY 설정을 바꿀 수 있으므로 제외한다.
+     */
     for (size_t i = 0; i < req->headers.n; i++) {
         const http_header_t *h = &req->headers.v[i];
         if (str_eq_ci(h->name, "Proxy") || str_eq_ci(h->name, "Content-Type") ||
@@ -152,6 +169,10 @@ static int make_pipe(int ends[2])
     ends[0] = opened[0];
     ends[1] = opened[1];
     for (size_t i = 0; i < 2; i++) {
+        /*
+         * 서버의 표준 fd가 닫혀 있으면 pipe가 같은 번호를 받을 수 있다.
+         * 그 경우 3 이상으로 옮겨 자식의 dup2와 원본 pipe 정리가 충돌하지 않게 한다.
+         */
         if (ends[i] <= STDERR_FILENO) {
             int fd = fcntl(ends[i], F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
             if (fd < 0) {
@@ -175,6 +196,7 @@ static pid_t start_cgi(char *script, char *const envp[], int in[2], int out[2])
     if (n == 0) {
         n = 1;
     }
+    /* fork 전에 작업 디렉토리를 계산해 자식에서는 준비된 값으로 시스템 호출만 한다. */
     memcpy(workdir, script, n);
     workdir[n] = '\0';
     if (pthread_mutex_lock(&cgi_fork_lock) != 0) {
@@ -185,6 +207,7 @@ static pid_t start_cgi(char *script, char *const envp[], int in[2], int out[2])
         if (pid == 0) {
             char *const args[] = {script, NULL};
 
+            /* 자식의 stdin은 요청 본문을 읽고 stdout은 CGI 응답을 부모에 돌려준다. */
             if (dup2(in[0], STDIN_FILENO) < 0 || dup2(out[1], STDOUT_FILENO) < 0) {
                 _exit(127);
             }
@@ -201,6 +224,7 @@ static pid_t start_cgi(char *script, char *const envp[], int in[2], int out[2])
         close_pipe(in);
         close_pipe(out);
     } else {
+        /* 부모는 쓰기용 stdin과 읽기용 stdout만 보유한다. 사용하지 않는 쓰기 끝은 EOF를 막는다. */
         (void)close(in[0]);
         (void)close(out[1]);
     }
@@ -217,6 +241,10 @@ static int launch_cgi(char *script, const http_request_t *req, const handler_ctx
     int out[2] = {-1, -1};
     pid_t pid = -1;
 
+    /*
+     * 연결 처리기가 CGI 실행 중에도 수신 버퍼를 관리할 수 있도록 요청 본문을 복사한다.
+     * 사본을 준비한 뒤 자식을 실행해 할당 실패 시 자식이나 파이프를 남기지 않는다.
+     */
     if (build_env(req, ctx, script_name, path_info, &env) == 0 &&
         (req->body.len == 0 || (buf_init(&input, req->body.len, req->body.len) == 0 &&
                                 buf_append(&input, req->body.ptr, req->body.len) == 0))) {
@@ -228,6 +256,10 @@ static int launch_cgi(char *script, const http_request_t *req, const handler_ctx
         return 500;
     }
 
+    /*
+     * 성공하면 부모 쪽 파이프, 본문 사본, 자식 회수 책임을 계획에 넘긴다.
+     * 연결 처리기는 절대 마감까지 CGI의 stdin과 stdout을 다루고 출력에서 응답 머리를 확정한다.
+     */
     int64_t timeout = ctx->cfg->cgi_timeout_ms;
     plan->kind = BODY_PIPE;
     plan->head_pending = true;
@@ -251,6 +283,10 @@ static int serve_cgi(const http_request_t *req, const route_t *rt, const handler
     if (*name == '/') {
         name++;
     }
+    /*
+     * /cgi/echo.sh/a는 루트의 echo.sh를 실행한다. SCRIPT_NAME은 /cgi/echo.sh이고
+     * 그 뒤 /a는 PATH_INFO로만 전달되어 디스크 경로를 결정하는 데 쓰이지 않는다.
+     */
     const char *path_info = name + strcspn(name, "/");
     str_t segment = {name, (size_t)(path_info - name)};
     if (segment.len == 0) {
@@ -304,6 +340,7 @@ static bool next_cgi_line(const char *p, size_t limit, size_t *pos, str_t *out)
     if (end == NULL) {
         return false;
     }
+    /* 위치는 LF 다음으로 옮기고, CRLF의 CR은 호출자가 검사할 줄에서 제외한다. */
     *pos = (size_t)(end - p) + 1;
     if (end != start && end[-1] == '\r') {
         end--;
@@ -322,6 +359,7 @@ static bool split_cgi_header(str_t line, http_header_t *out)
     if (!http_token_valid(out->name)) {
         return false;
     }
+    /* HTAB은 헤더 값의 공백으로 허용하되 NUL·CR 등 다른 제어 문자는 거부한다. */
     str_t value = {colon + 1, line.len - out->name.len - 1};
     for (size_t i = 0; i < value.len; i++) {
         unsigned char c = (unsigned char)value.ptr[i];
@@ -337,6 +375,7 @@ static bool cgi_status_code(str_t value, int *status)
 {
     uint64_t parsed;
 
+    /* 상태는 한 번만 정하며, 코드 뒤에 사유가 붙으면 공백으로 구분되어야 한다(D-033). */
     if (*status != 0 || value.len < 3 || (value.len > 3 && value.ptr[3] != ' ') ||
         str_to_u64((str_t){value.ptr, 3}, 599, &parsed) < 0 || parsed < 100) {
         return false;
@@ -345,6 +384,10 @@ static bool cgi_status_code(str_t value, int *status)
     return true;
 }
 
+/*
+ * 첫 번째 패스에서 모든 줄을 검증하고 상태, 본문 길이, Connection 옵션을 모은다.
+ * 뒤쪽 Connection 줄도 앞쪽 헤더의 전달 여부에 영향을 줄 수 있다.
+ */
 static int collect_cgi_headers(const char *p, size_t head_len, int *status, http_framing_t *framing,
                                buf_t *connection)
 {
@@ -381,6 +424,7 @@ static int collect_cgi_headers(const char *p, size_t head_len, int *status, http
 static int write_cgi_headers(const char *p, size_t head_len, const buf_t *connection, int *status,
                              buf_t *out)
 {
+    /* 모은 Connection 옵션으로 고정 목록과 연결별 제외 항목을 함께 판정한다. */
     http_headers_t options = {
         .v = {{STR_LIT("Connection"), {connection->data, connection->len}}},
         .n = connection->len == 0 ? 0 : 1,
@@ -402,6 +446,7 @@ static int write_cgi_headers(const char *p, size_t head_len, const buf_t *connec
                         h.value.len == 0 ? "" : h.value.ptr) < 0) {
             return -1;
         }
+        /* 명시적 Status가 없고 전달할 Location이 있으면 기본 상태를 302로 정한다. */
         if (*status == 0 && str_eq_ci(h.name, "Location")) {
             *status = 302;
         }
@@ -418,6 +463,10 @@ static int parse_cgi_headers(const char *p, size_t head_len, http_head_out_t *he
     size_t cap = head->fields.max == 0 ? SIZE_MAX : head->fields.max;
     int result = -1;
 
+    /*
+     * 출력 헤더는 임시 버퍼에 만든다. 파싱과 복사가 모두 성공한 시점에만 호출자의
+     * 헤더를 갱신해, 중간에 오류가 났을 때 완성되기 전의 응답이 남지 않게 한다.
+     */
     if (collect_cgi_headers(p, head_len, &status, &framing, &connection) == 0 &&
         buf_init(&fields, 0, cap) == 0 &&
         write_cgi_headers(p, head_len, &connection, &status, &fields) == 0) {
@@ -442,6 +491,10 @@ static int parse_cgi_headers(const char *p, size_t head_len, http_head_out_t *he
 http_parse_result_t cgi_parse_head(const char *p, size_t len, size_t max_head,
                                    http_head_out_t *out_head, size_t *out_used, int *out_status)
 {
+    /*
+     * 빈 줄까지만 길이 제한에 포함한다. 같은 읽기에서 이미 본문까지 도착했어도
+     * 구분자까지의 길이만 검사하고 본문 시작 위치를 out_used로 돌려준다.
+     */
     size_t limit = len < max_head ? len : max_head;
     size_t pos = 0;
     str_t line;
@@ -456,6 +509,7 @@ http_parse_result_t cgi_parse_head(const char *p, size_t len, size_t max_head,
             return HTTP_PARSE_ERROR;
         }
     }
+    /* 빈 줄이 없으면 상한까지 여유가 있을 때만 다음 입력을 기다린다. */
     if (len < max_head) {
         return HTTP_PARSE_INCOMPLETE;
     }

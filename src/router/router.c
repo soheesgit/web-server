@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * 규칙 배열을 설정 순서대로 한 번 만든 뒤 요청마다 읽기만 한다.
+ * 규칙의 문자열은 config_t를 가리키므로 라우터가 해제될 때까지 설정이 살아 있어야 한다.
+ */
 struct router {
     size_t count;
     route_t routes[];
@@ -29,6 +33,7 @@ router_t *router_new(const config_t *cfg, router_upstream_lookup_fn lookup, void
     }
 
     r->count = count;
+    /* 명시된 규칙이 없는 설정의 기본 라우트는 모든 경로를 cfg->root에서 찾는다. */
     if (cfg->n_routes == 0) {
         r->routes[0] =
             (route_t){.kind = ROUTE_STATIC, .prefix = "/", .prefix_len = 1, .root = cfg->root};
@@ -43,6 +48,7 @@ router_t *router_new(const config_t *cfg, router_upstream_lookup_fn lookup, void
         rt->prefix = conf->prefix;
         rt->prefix_len = strlen(conf->prefix);
         rt->host = conf->host[0] == '\0' ? NULL : conf->host;
+        /* 이름 해석은 호출자에게 맡겨 라우터가 업스트림 구현에 의존하지 않게 한다. */
         if (conf->kind == ROUTE_PROXY) {
             rt->strip_prefix = conf->strip_prefix;
             rt->keep_host = conf->keep_host;
@@ -79,6 +85,7 @@ static str_t host_without_port(str_t host)
     if (host.len == 0) {
         return host;
     }
+    /* [2001:db8::1]:8080의 주소 안에 있는 콜론은 그대로 두고 포트만 뗀다. */
     if (host.ptr[0] == '[') {
         const char *end = memchr(host.ptr, ']', host.len);
         if (end != NULL && (size_t)(end - host.ptr + 1) < host.len && end[1] == ':') {
@@ -97,6 +104,10 @@ static bool match_prefix(const route_t *rt, const char *path, size_t path_len)
 {
     size_t n = rt->prefix_len;
 
+    /*
+     * 문자 일치에 이어 경로 세그먼트 경계를 확인한다. /api는 /api와 /api/x에,
+     * 끝에 슬래시가 붙은 /api/는 /api/x에 일치한다.
+     */
     return n != 0 && n <= path_len && memcmp(path, rt->prefix, n) == 0 &&
            (n == path_len || rt->prefix[n - 1] == '/' || path[n] == '/');
 }
@@ -107,6 +118,10 @@ const route_t *router_match(const router_t *r, str_t host, const char *path)
     const route_t *matched_any = NULL;
     size_t path_len = strlen(path);
 
+    /*
+     * Host가 일치하는 후보와 공용 후보의 최장 prefix를 따로 기억한다.
+     * Host 전용 후보에 우선권이 있으며, 같은 길이는 먼저 본 설정을 유지한다.
+     */
     host = host_without_port(host);
     for (size_t i = 0; i < r->count; i++) {
         const route_t *rt = &r->routes[i];
