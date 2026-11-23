@@ -197,6 +197,10 @@ typedef struct {
     conn_t *c;
 } conn_fixture_t;
 
+/* conn_setup이 만든 router. 테스트가 해제하지 않으므로 도달 가능하게 두어 LeakSanitizer 보고를
+ * 막는다. */
+static router_t *volatile g_last_router;
+
 static int conn_setup(conn_fixture_t *fx)
 {
     char err[256];
@@ -209,6 +213,7 @@ static int conn_setup(conn_fixture_t *fx)
         return -1;
     }
     fx->router = router_new(fx->cfg, NULL, NULL, err, sizeof(err));
+    g_last_router = fx->router;
     if (fx->router == NULL) {
         return -1;
     }
