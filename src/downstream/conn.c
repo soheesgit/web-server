@@ -8,6 +8,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -881,6 +883,12 @@ conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *
         free(c);
         return NULL;
     }
+    /* 머리와 본문(sendfile)을 따로 보내므로, Nagle이 켜져 있으면 둘째 조각이 클라이언트의 지연 ACK
+     * (약 40ms)를 기다린다. TCP가 아닌 소켓(테스트의 socketpair)에서는 실패해도 된다. */
+    {
+        int one = 1;
+        (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    }
     /* v2는 non-blocking, v1은 blocking 소켓에 짧은 커널 timeout을 설정한다. */
     if (env->nonblocking) {
         if (platform_set_nonblock(fd) != 0) {
@@ -935,7 +943,17 @@ void conn_free(conn_t *c)
 static ssize_t read_client_once(conn_t *c)
 {
     /* core 버퍼 함수로 소켓에서 한 번 읽는다. 버퍼 상한 도달은 별도 값 -2로 구분한다. */
+    const char *before = c->rbuf.data;
     ssize_t n = buf_read_fd(&c->rbuf, c->fd);
+    /* 읽을 자리를 늘리다 rbuf가 옮겨지면(EAGAIN이어도) req의 문자열 뷰가 해제된 메모리를 가리킨다.
+     * 마감·오류 응답이 그 뷰로 로그를 쓰기 전에 다시 파싱해 고치고, 안 되면 비운다. */
+    if (c->rbuf.data != before) {
+        int status = 0;
+        if (request_parse_head(c->rbuf.data, c->rbuf.len, c->env.lim, &c->req, &status) !=
+            HTTP_PARSE_DONE) {
+            memset(&c->req, 0, sizeof(c->req));
+        }
+    }
     if (n < 0) {
         if (errno == EMSGSIZE) {
             return -2;
