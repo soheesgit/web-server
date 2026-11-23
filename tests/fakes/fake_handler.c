@@ -52,6 +52,10 @@ void fake_request_add_header(http_request_t *r, const char *name, const char *va
     h->value.len = strlen(value);
 }
 
+/* 마지막으로 만든 설정. 테스트는 fork된 자식에서 돌고 해제하지 않으므로, 도달 가능하게 두어
+ * ASan(LeakSanitizer)이 누수로 보고하지 않게 한다. */
+static config_t *volatile g_last_cfg;
+
 config_t *fake_config(void)
 {
     config_t *cfg = calloc(1, sizeof(*cfg));
@@ -67,6 +71,7 @@ config_t *fake_config(void)
         free(cfg);
         return NULL;
     }
+    g_last_cfg = cfg;
     return cfg;
 }
 
