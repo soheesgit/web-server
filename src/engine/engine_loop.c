@@ -7,6 +7,7 @@
 #include "engine/engine.h"
 
 #include <errno.h>
+#include <stddef.h>
 
 int engine_watch(engine_t *e, int fd, unsigned events, void *obj)
 {
