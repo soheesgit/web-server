@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -126,21 +127,29 @@ static void t_u_hd_02(void)
 
 static void t_u_hd_04(void)
 {
-    const char *dir = test_tmpdir();
-    char path[4096];
+    char dir[] = "/tmp/httpd-plan-test.XXXXXX";
+    char path[sizeof(dir) + sizeof("/f.txt")];
     response_plan_t p;
     int fd;
 
-    CHECK(dir != NULL);
+    CHECK(mkdtemp(dir) != NULL);
     CHECK_EQ_INT(test_write_file(dir, "f.txt", "x", 1, 0644), 0);
     CHECK(snprintf(path, sizeof(path), "%s/f.txt", dir) < (int)sizeof(path));
     fd = open(path, O_RDONLY);
     CHECK(fd >= 0);
+    CHECK_EQ_INT(unlink(path), 0);
+    CHECK_EQ_INT(rmdir(dir), 0);
+
     new_plan(&p);
-    p.kind = BODY_FILE;
+    /* BODY_NONE은 같은 저장 공간에 fd 값이 있어도 그 fd를 소유하지 않는다. */
+    p.body.file.fd = fd;
+    plan_cleanup(&p);
+    CHECK(fcntl(fd, F_GETFD) != -1);
+
     p.body.file.fd = fd;
     p.body.file.off = 0;
     p.body.file.len = 1;
+    p.kind = BODY_FILE;
     plan_cleanup(&p);
     errno = 0;
     CHECK(fcntl(fd, F_GETFD) == -1 && errno == EBADF);

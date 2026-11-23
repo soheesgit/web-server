@@ -19,7 +19,10 @@
 void plan_init(response_plan_t *p)
 {
     memset(p, 0, sizeof(*p));
-    /* FILE과 PIPE는 첫 fd 위치를 공유한다. body의 유효한 멤버는 kind로 구분한다. */
+    /*
+     * FILE과 PIPE가 공유하는 첫 fd를 포함해 PIPE의 기본값을 기록한다.
+     * BODY_NONE에는 본문 자원이 없다. 다른 종류로 바꿀 때는 사용할 멤버를 먼저 초기화한다.
+     */
     p->body.pipe.out_fd = -1;
     p->body.pipe.in_fd = -1;
     p->body.pipe.deadline_ms = -1;
@@ -32,8 +35,8 @@ int plan_set_mem(response_plan_t *p, int status, const char *content_type, const
     response_plan_t next;
 
     plan_init(&next);
-    next.kind = BODY_MEM;
     next.body.mem.data = (buf_t){0};
+    next.kind = BODY_MEM;
     next.head.status = status;
     next.head.framing = (http_framing_t){FRAMING_LENGTH, n};
     if (status < 100 || status > 599 || (n != 0 && body == NULL)) {
@@ -63,8 +66,8 @@ int plan_error(response_plan_t *p, int status)
         return -1;
     }
 
-    p->kind = BODY_MEM;
     p->body.mem.data = (buf_t){0};
+    p->kind = BODY_MEM;
     if (buf_init(&p->body.mem.data, 128, 1024) != 0 ||
         http_error_body(status, &p->body.mem.data) != 0 ||
         plan_add_header(p, "Content-Type", "text/html; charset=utf-8") != 0) {
@@ -147,6 +150,7 @@ void plan_cleanup(response_plan_t *p)
     }
     switch (p->kind) {
     case BODY_NONE:
+        /* union에 들어 있는 값과 관계없이 정리할 본문 자원이 없다. */
         break;
     case BODY_MEM:
         buf_cleanup(&p->body.mem.data);
