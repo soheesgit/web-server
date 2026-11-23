@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -296,13 +297,16 @@ static int make_pipe(int fds[2])
 }
 
 /* 자식: async-signal-safe 함수만 쓴다 */
-static void run_child(int in_r, int out_w, const char *dir, const char *script, char **envp)
+static void run_child(int in_r, int out_w, const char *dir, const char *script, char **envp,
+                      const struct sigaction *dfl)
 {
     char *argv[2];
 
     argv[0] = (char *)script;
     argv[1] = NULL;
-    if (dup2(in_r, STDIN_FILENO) < 0 || dup2(out_w, STDOUT_FILENO) < 0 || chdir(dir) != 0) {
+    /* 서버가 무시하는 SIGPIPE는 exec 뒤에도 무시로 남으므로 기본 동작으로 되돌린다 */
+    if (sigaction(SIGPIPE, dfl, NULL) != 0 || dup2(in_r, STDIN_FILENO) < 0 ||
+        dup2(out_w, STDOUT_FILENO) < 0 || chdir(dir) != 0) {
         _exit(127);
     }
     execve(script, argv, envp);
@@ -361,6 +365,7 @@ handler_result_t cgi_handle(const http_request_t *req, const route_t *rt, const 
     int in_fds[2] = {-1, -1};
     int out_fds[2] = {-1, -1};
     envp_t env = {{NULL}, 0, false};
+    struct sigaction dfl;
     buf_t in_data;
     size_t seg_len;
     pid_t pid;
@@ -401,6 +406,9 @@ handler_result_t cgi_handle(const http_request_t *req, const route_t *rt, const 
         env_free(&env);
         return fail(out_plan, 500);
     }
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    (void)sigemptyset(&dfl.sa_mask);
     if (buf_append(&in_data, req->body.ptr, req->body.len) != 0 || make_pipe(in_fds) != 0 ||
         make_pipe(out_fds) != 0) {
         close_pair(in_fds);
@@ -410,7 +418,7 @@ handler_result_t cgi_handle(const http_request_t *req, const route_t *rt, const 
     }
     pid = fork();
     if (pid == 0) {
-        run_child(in_fds[0], out_fds[1], dir, real, env.v);
+        run_child(in_fds[0], out_fds[1], dir, real, env.v, &dfl);
     }
     env_free(&env);
     (void)close(in_fds[0]);
