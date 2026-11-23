@@ -36,8 +36,10 @@
 
 ## 구현 단계
 1단계 (`core` + `common`). 분담: A `str`, `buf` · B `config`, `log` · C `platform`.
-- [ ] str
-- [ ] buf
-- [ ] config
-- [ ] log
-- [ ] platform
+- [x] str
+- [x] buf
+- [x] config
+- [x] log
+- [x] platform
+
+소스 구현은 반영했다. POSIX 빌드와 테스트는 아직 실행하지 않았다.

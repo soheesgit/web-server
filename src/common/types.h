@@ -34,6 +34,7 @@ struct backend;
 
 /**
  * 요청 메서드. 지원하지 않는 메서드는 HTTP_OTHER (파서는 501로 거부).
+ * 역할: 요청에서 받은 메서드를 서버가 지원하는 종류로 구분한다.
  *
  * 생성:   request_parse_head
  * 소멸:   없음
@@ -44,6 +45,7 @@ typedef enum { HTTP_GET, HTTP_HEAD, HTTP_POST, HTTP_OTHER } http_method_t;
 
 /**
  * 파서 결과. DONE 완료, INCOMPLETE 더 받아야 함, ERROR 오류(out_status에 상태 코드).
+ * 역할: 파싱을 계속할지, 성공으로 끝낼지, 오류 응답을 만들지 호출자에게 알려준다.
  *
  * 생성:   각 *_parse_* 함수
  * 소멸:   없음
@@ -54,6 +56,7 @@ typedef enum { HTTP_PARSE_DONE, HTTP_PARSE_INCOMPLETE, HTTP_PARSE_ERROR } http_p
 
 /**
  * 본문 길이 방식. NONE 본문 없음, LENGTH Content-Length, CHUNKED chunked, CLOSE 연결 종료까지.
+ * 역할: 다음 본문을 어떤 규칙으로 읽고 끝을 판정할지 나타낸다.
  *
  * 생성:   http_resolve_framing, 처리기
  * 소멸:   없음
@@ -64,6 +67,7 @@ typedef enum { FRAMING_NONE, FRAMING_LENGTH, FRAMING_CHUNKED, FRAMING_CLOSE } ht
 
 /**
  * 본문 경계 추적 결과. MORE 아직 남음, DONE 본문 끝, ERROR 형식 오류.
+ * 역할: 본문 추적기가 입력 조각을 처리한 뒤의 진행 결과를 나타낸다.
  *
  * 생성:   http_body_track
  * 소멸:   없음
@@ -74,6 +78,7 @@ typedef enum { BODY_MORE, BODY_DONE, BODY_ERROR } http_body_result_t;
 
 /**
  * 헤더 한 줄 (이름과 값). 값은 앞뒤 OWS를 뗀 상태.
+ * 역할: HTTP 메시지의 헤더 이름 하나와 값 하나를 함께 보관한다.
  *
  * 생성:   http_parse_headers, fake_request_add_header
  * 소멸:   없음
@@ -87,6 +92,7 @@ typedef struct {
 
 /**
  * 헤더 목록 (받은 순서 유지, 같은 이름 중복 보존).
+ * 역할: 메시지에 포함된 헤더들을 받은 순서대로 담는다.
  *
  * 생성:   http_parse_headers
  * 소멸:   없음 (내장 배열)
@@ -100,6 +106,7 @@ typedef struct {
 
 /**
  * 본문 길이 방식과 길이.
+ * 역할: 본문을 읽을 때 적용할 방식과 필요한 바이트 수를 한데 담는다.
  *
  * 생성:   http_resolve_framing, 처리기
  * 소멸:   없음
@@ -113,6 +120,7 @@ typedef struct {
 
 /**
  * 요청 파싱 제한값. app이 config_t에서 만든다.
+ * 역할: 요청 헤더, 헤더 개수, URI, 본문이 넘을 수 없는 상한을 전달한다.
  *
  * 생성:   app (config_t 변환), 테스트
  * 소멸:   없음
@@ -128,6 +136,7 @@ typedef struct {
 
 /**
  * 본문 경계 추적기. 바이트를 복사하지 않고 본문의 끝이 어디인지만 센다.
+ * 역할: 여러 번 나뉘어 도착하는 본문 조각을 이어서 읽고 본문 끝을 판정한다.
  *
  * 생성:   http_body_tracker_init
  * 소멸:   없음 (값 타입)
@@ -142,6 +151,7 @@ typedef struct {
 
 /**
  * 파싱된 요청 하나.
+ * 역할: 요청 줄과 헤더를 파싱한 결과를 보관하고, 본문 수신 결과도 연결한다.
  *
  * 생성:   request_parse_head (body 제외), conn (body), fake_request (테스트)
  * 소멸:   없음 (값 타입. 빌린 버퍼는 conn이 관리)
@@ -167,6 +177,7 @@ typedef struct {
 
 /**
  * 파싱된 업스트림 응답 머리 하나.
+ * 역할: 프록시 대상 서버가 보낸 상태 줄과 헤더를 보관한다.
  *
  * 생성:   response_parse_head
  * 소멸:   없음
@@ -185,6 +196,7 @@ typedef struct {
 
 /**
  * 클라이언트에 보낼 응답 머리.
+ * 역할: 응답 상태, 헤더, 본문 전달 방식을 응답 계획에 제공한다.
  *
  * 생성:   plan_init이 초기화, 처리기(plan_set_mem, plan_error, plan_add_header 등)가 채움
  * 소멸:   plan_cleanup (fields 해제)
@@ -201,6 +213,7 @@ typedef struct {
 
 /**
  * 응답 본문의 출처.
+ * 역할: 응답 본문을 메모리, 파일, CGI, 업스트림 중 어디서 가져올지 고른다.
  *
  * 생성:   처리기
  * 소멸:   없음
@@ -217,6 +230,7 @@ typedef enum {
 
 /**
  * 처리기가 만드는 응답 계획: 무엇을 보낼지만 담고 실제 송신은 conn이 한다.
+ * 역할: 응답 머리와 본문 자원을 묶어 두고, 연결 처리기가 이를 실제로 전송하게 한다.
  *
  * 생성:   plan_init 후 처리기 (static_handle, cgi_handle, proxy_on_head, plan_error 등)
  * 소멸:   plan_cleanup (멱등)
@@ -252,6 +266,7 @@ typedef struct {
 
 /**
  * 프록시 시도 한 번의 실패 이유. relay가 돌려주고 proxy_on_fail이 판단한다.
+ * 역할: 프록시 연결이나 응답 수신이 실패한 지점을 재시도 판단에 전달한다.
  *
  * 생성:   relay
  * 소멸:   없음
@@ -267,6 +282,7 @@ typedef enum {
 
 /**
  * 프록시 실패 후 다음 행동.
+ * 역할: 실패한 백엔드를 바꿔 재시도할지, 오류 응답으로 끝낼지 나타낸다.
  *
  * 생성:   proxy_on_fail
  * 소멸:   없음
@@ -280,6 +296,7 @@ typedef enum {
 
 /**
  * 프록시 요청 하나의 진행 상태.
+ * 역할: 업스트림으로 보낼 요청과 현재 백엔드, 재시도 진행 상황을 묶어 관리한다.
  *
  * 생성:   proxy_begin
  * 소멸:   proxy_job_cleanup (멱등)
