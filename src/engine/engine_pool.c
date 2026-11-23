@@ -5,6 +5,7 @@
 #include "engine/engine.h"
 
 #include "core/platform.h"
+#include "engine/internal_loop.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -15,32 +16,6 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-
-typedef struct work_item {
-    int fd;
-    void *obj;
-    struct work_item *next;
-} work_item_t;
-
-struct engine {
-    engine_kind_t kind;
-    int worker_count;
-    size_t queue_cap;
-    size_t queue_len;
-    size_t queue_head;
-    size_t queue_tail;
-    work_item_t **queue;
-    pthread_t *workers;
-    int workers_started;
-    bool worker_stop;
-    bool running;
-    const engine_callbacks_t *cb;
-    void *ctx;
-    pthread_mutex_t lock;
-    pthread_cond_t ready;
-    pthread_cond_t changed;
-    work_item_t *active;
-};
 
 static void *worker_main(void *arg)
 {
@@ -84,9 +59,11 @@ engine_t *engine_new(engine_kind_t kind, int workers, int queue_len, const engin
                      void *ctx)
 {
     engine_t *e;
+    if (kind == ENGINE_EVENT_LOOP)
+        return loop_engine_new(cb, ctx);
     if (cb == NULL || kind != ENGINE_THREAD_POOL || workers < 1 || queue_len < 1 ||
         cb->on_accept == NULL || cb->serve_blocking == NULL || cb->on_close == NULL) {
-        errno = kind == ENGINE_EVENT_LOOP ? ENOTSUP : EINVAL;
+        errno = EINVAL;
         return NULL;
     }
     e = calloc(1, sizeof(*e));
@@ -198,6 +175,8 @@ int engine_run(engine_t *e, int listen_fd, volatile sig_atomic_t *stop, int shut
         errno = EINVAL;
         return -1;
     }
+    if (e->kind == ENGINE_EVENT_LOOP)
+        return loop_engine_run(e, listen_fd, stop, shutdown_grace_ms);
     e->running = true;
     for (i = 0; i < e->worker_count; i++) {
         int prc = pthread_create(&e->workers[i], NULL, worker_main, e);
@@ -273,6 +252,11 @@ void engine_free(engine_t *e)
     size_t i;
     if (e == NULL)
         return;
+    if (e->kind == ENGINE_EVENT_LOOP) {
+        loop_engine_free(e);
+        errno = saved;
+        return;
+    }
     if (e->workers_started > 0) {
         pthread_mutex_lock(&e->lock);
         e->worker_stop = true;

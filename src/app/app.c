@@ -42,6 +42,32 @@ static void serve_blocking(void *ctx, void *obj)
     conn_serve_blocking(obj);
 }
 
+/* v2: 연결이 다음에 기다릴 것을 엔진에 알린다. 0 계속, -1 닫기. */
+static int watch_next(app_t *a, conn_t *c, conn_status_t st)
+{
+    unsigned events = st == CONN_WANT_READ ? EV_READ : st == CONN_WANT_WRITE ? EV_WRITE : 0;
+    if (st == CONN_CLOSE)
+        return -1;
+    /* CONN_WAIT_FD면 클라이언트 fd는 쉬게 둔다(추가 fd는 conn이 이미 등록했다). */
+    return engine_watch(a->engine, conn_fd(c), events, c) == 0 ? 0 : -1;
+}
+
+static int on_event(void *ctx, void *obj, int fd, unsigned events, int64_t now_ms)
+{
+    return watch_next(ctx, obj, conn_on_event(obj, fd, events, now_ms));
+}
+
+static int on_timeout(void *ctx, void *obj, int64_t now_ms)
+{
+    return watch_next(ctx, obj, conn_on_timeout(obj, now_ms));
+}
+
+static int64_t deadline_ms(void *ctx, void *obj)
+{
+    (void)ctx;
+    return conn_deadline_ms(obj);
+}
+
 static void on_close(void *ctx, void *obj)
 {
     (void)ctx;
@@ -71,9 +97,9 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
     static const engine_callbacks_t callbacks = {
         .on_accept = on_accept,
         .serve_blocking = serve_blocking,
-        .on_event = NULL,
-        .on_timeout = NULL,
-        .deadline_ms = NULL,
+        .on_event = on_event,
+        .on_timeout = on_timeout,
+        .deadline_ms = deadline_ms,
         .on_close = on_close,
         .on_busy = on_busy,
     };
@@ -97,19 +123,18 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
     a->listen_fd = listener_open(a->cfg.listen_host, a->cfg.port, a->cfg.backlog, err, errcap);
     if (a->listen_fd < 0)
         goto fail;
-    a->conn_env = (conn_env_t){.cfg = &a->cfg,
-                               .lim = &a->limits,
-                               .router = a->router,
-                               .engine = NULL,
-                               .nonblocking = false};
     a->engine = engine_new(cfg->engine == CFG_ENGINE_POOL ? ENGINE_THREAD_POOL : ENGINE_EVENT_LOOP,
                            cfg->workers, cfg->queue_len, &callbacks, a);
     if (a->engine == NULL) {
         if (err != NULL && errcap > 0 && err[0] == '\0')
-            (void)snprintf(err, errcap, "engine: %s",
-                           errno == ENOTSUP ? "event loop is not enabled" : "cannot create");
+            (void)snprintf(err, errcap, "engine: cannot create");
         goto fail;
     }
+    a->conn_env = (conn_env_t){.cfg = &a->cfg,
+                               .lim = &a->limits,
+                               .router = a->router,
+                               .engine = cfg->engine == CFG_ENGINE_POOL ? NULL : a->engine,
+                               .nonblocking = cfg->engine != CFG_ENGINE_POOL};
     return a;
 fail:
     app_free(a);

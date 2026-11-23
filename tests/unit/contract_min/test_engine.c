@@ -64,6 +64,7 @@ static void cb_serve(void *ctx, void *obj)
     pthread_mutex_unlock(&g_mu);
 }
 
+/* v2: 연결이 끊긴 것을 읽기 이벤트로 받으면 한 번 처리한 것으로 세고 닫는다. */
 static int cb_event(void *ctx, void *obj, int fd, unsigned events, int64_t now_ms)
 {
     (void)ctx;
@@ -71,6 +72,9 @@ static int cb_event(void *ctx, void *obj, int fd, unsigned events, int64_t now_m
     (void)fd;
     (void)events;
     (void)now_ms;
+    pthread_mutex_lock(&g_mu);
+    g_served++;
+    pthread_mutex_unlock(&g_mu);
     return -1;
 }
 
@@ -211,23 +215,28 @@ static void *connector(void *arg)
 
 static void t_u_en_02(void)
 {
-    int lfd = open_listener(&g_port);
-    engine_t *e;
-    pthread_t th;
+    /* v1 스레드 풀과 v2 이벤트 루프가 같은 약속을 지키는지 차례로 본다. */
+    static const engine_kind_t kinds[] = {ENGINE_THREAD_POOL, ENGINE_EVENT_LOOP};
 
-    CHECK(lfd >= 0);
-    e = engine_new(ENGINE_THREAD_POOL, 4, 1024, &CB, NULL);
-    CHECK(e != NULL);
-    g_stop = 0;
-    g_accepted = g_served = g_closed = 0;
-    CHECK_EQ_INT(pthread_create(&th, NULL, connector, NULL), 0);
-    CHECK_EQ_INT(engine_run(e, lfd, &g_stop, 1000), 0);
-    pthread_join(th, NULL);
-    engine_free(e);
-    close(lfd);
-    CHECK_EQ_INT(g_accepted, 1000);
-    CHECK_EQ_INT(g_served, 1000);
-    CHECK_EQ_INT(g_closed, 1000);
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        int lfd = open_listener(&g_port);
+        engine_t *e;
+        pthread_t th;
+
+        CHECK(lfd >= 0);
+        e = engine_new(kinds[k], 4, 1024, &CB, NULL);
+        CHECK(e != NULL);
+        g_stop = 0;
+        g_accepted = g_served = g_closed = 0;
+        CHECK_EQ_INT(pthread_create(&th, NULL, connector, NULL), 0);
+        CHECK_EQ_INT(engine_run(e, lfd, &g_stop, 1000), 0);
+        pthread_join(th, NULL);
+        engine_free(e);
+        close(lfd);
+        CHECK_EQ_INT(g_accepted, 1000);
+        CHECK_EQ_INT(g_served, 1000);
+        CHECK_EQ_INT(g_closed, 1000);
+    }
 }
 
 static void t_u_en_05(void)
