@@ -25,10 +25,19 @@ static void set_error(char *err, size_t errcap, const char *stage, int code)
         return;
     }
     message[0] = '\0';
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+    /* glibc의 GNU strerror_r는 문자열 포인터를 돌려준다 */
     message_text = strerror_r(code, message, sizeof(message));
     if (message_text == NULL) {
         message_text = "unknown error";
     }
+#else
+    /* XSI strerror_r(macOS 등)는 int를 돌려주고 message에 쓴다 */
+    if (strerror_r(code, message, sizeof(message)) != 0) {
+        (void)snprintf(message, sizeof(message), "error %d", code);
+    }
+    message_text = message;
+#endif
     (void)snprintf(err, errcap, "%s: %s", stage, message_text);
 }
 
