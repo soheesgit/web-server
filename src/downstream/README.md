@@ -40,4 +40,4 @@
 - [x] response_writer
 - [x] listener
 - [x] conn — blocking 경로 (v1)
-- [ ] conn — 이벤트 경로 (v2)
+- [x] conn — 이벤트 경로 (v2): CGI pipe·업스트림 fd를 engine_watch로 기다리는 단계 상태 머신

@@ -11,6 +11,6 @@
 - app 조립·실행: `src/app/app.c`, `src/app/main.c`
 - 모듈 진행 상태: 각 디렉토리의 `README.md`
 
-선택 단계인 v2 event loop는 구현되지 않았다. `ENGINE_EVENT_LOOP`, `engine_watch`, `engine_unwatch`는 현재 `ENOTSUP`을 반환한다.
+v2 event loop는 `src/engine/engine_loop.c`(내부 상태 `src/engine/internal_loop.h`)에 구현했다. 측정 결과는 `src/engine/README.md`.
 Docker Linux 환경에서 v1 pool 기준 빌드·린트·단위·필수 E2E를 실행했다. v2 전체 동작,
 ASan 최종 결과, macOS 빌드는 미확인이다.

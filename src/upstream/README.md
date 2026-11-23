@@ -44,6 +44,6 @@
 - [x] lb
 - [x] pool
 - [x] relay — blocking (v1)
-- [ ] relay — 상태 머신 (v2)
+- [x] relay — 상태 머신 (v2)
 
-v1 소스 구현은 반영했다. v2 relay 상태 머신 코드는 있으나 이벤트 엔진·downstream과의 실행 경로 통합은 보류되어 미완료로 표시했다. WSL Ubuntu에서 `make`, `make lint`, `make test`를 실행해 통과했다 (2026-11-23). `make asan`은 아직 실행하지 않았다.
+v1과 v2를 모두 반영했다. v2는 downstream `conn.c`가 `relay_start`·`relay_step`을 이벤트마다 부르고 `relay_fd`를 엔진에 등록한다. WSL Ubuntu에서 `make`, `make lint`, `make test`를 실행해 통과했다 (2026-11-23). `make asan`은 아직 실행하지 않았다.

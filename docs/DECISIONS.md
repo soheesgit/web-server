@@ -299,3 +299,11 @@
 - 결정: `plan_init`은 fd 쪽 기본값(-1)을 지키고 `conn = NULL`을 쓰지 않는다. `upstream.conn`은 BODY_UPSTREAM으로 바꿀 때 처리기가 채운다(`proxy_on_head`가 이미 그렇게 한다). feat/stage1-sohee의 D-034(제안)와 같은 방향이다.
 - 대안: 본문 종류별 생성 함수 추가, union을 struct로 바꿈 (공개 구조체 변경).
 - 영향: `src/handler/plan.c`, `src/handler/plan.h` (주석). U-HD-01.
+
+## D-040 v2 이벤트 루프의 연결·추가 fd 처리
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: 7단계(선택) v2를 구현하면서 engine.h·conn.h가 정하지 않은 운영 규칙이 필요했다. 연결이 무엇을 기다릴지 엔진에 알리는 방법, CGI·프록시를 기다리는 동안 클라이언트 fd를 어떻게 감시할지, relay가 연결을 새로 열 때의 등록 처리다.
+- 결정: (1) 엔진은 accept한 fd를 EV_READ로 처음 등록하고, 그 뒤 감시 이벤트는 app 콜백이 conn 상태(`CONN_WANT_READ`/`WRITE`/`WAIT_FD`)를 보고 `engine_watch`로 바꾼다. (2) CGI·프록시를 기다리는 동안 클라이언트는 읽기를 감시해 끊김(EOF)을 알아채고, 다음 요청 바이트가 미리 오면 그 응답이 끝날 때까지 읽기 감시를 멈춘다(레벨 트리거 반복 방지). (3) relay가 실패 후 새 연결을 열면 같은 fd 번호가 재사용될 수 있어, `relay_step`마다 등록을 풀고 다시 건다. 닫힌 fd의 `poller_del`은 기록만 지운다. (4) 업스트림 본문은 업스트림 rbuf에서 바로 보내고(복사 없음), 클라이언트가 막히면 출처 읽기를 멈춘다. (5) 엔진 내부 상태는 `src/engine/internal_loop.h`에 둔다(README가 정한 이름).
+- 대안: CGI·프록시를 v2에서도 블로킹 도우미 스레드로 넘김 (단일 루프 스레드 원칙과 어긋남), 엔진이 연결의 읽기·쓰기 요구를 직접 추측함 (콜백 반환값에 정보가 없음).
+- 영향: `src/engine/engine_loop.c`, `src/engine/engine_pool.c`, `src/engine/internal_loop.h`, `src/engine/poller_epoll.c`, `src/engine/poller_kqueue.c`, `src/app/app.c`, `src/downstream/conn.c`. U-EN-02(두 엔진), E-* 68개(`HTTPD_ENGINE=loop`).

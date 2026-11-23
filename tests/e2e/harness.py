@@ -209,6 +209,9 @@ class Server:
             cmd = [BIN, "-c", self.conf_path] + self.args
         else:
             cmd = [BIN, "-p", str(self.port), "-r", self.root] + self.args
+        # HTTPD_ENGINE=loop 이면 같은 E2E를 v2 이벤트 루프 엔진으로 돌린다.
+        if os.environ.get("HTTPD_ENGINE"):
+            cmd += ["-e", os.environ["HTTPD_ENGINE"]]
         self._out = open(os.path.join(self._tmp.name, "stdout"), "wb")
         self._err = open(os.path.join(self._tmp.name, "stderr"), "wb")
         self.proc = subprocess.Popen(cmd, cwd=REPO, stdout=self._out, stderr=self._err,
