@@ -42,7 +42,8 @@ http_parse_result_t response_parse_head(const char *p, size_t len, http_method_t
         *out_status = 502;
         return HTTP_PARSE_ERROR;
     }
-    if (skip > len || head_len > len - skip) {
+    /* head_len은 앞 빈 줄(skip)을 포함한 p 기준 끝 위치다 (http_find_head_end). */
+    if (skip > head_len || head_len > len) {
         *out_status = 502;
         return HTTP_PARSE_ERROR;
     }
