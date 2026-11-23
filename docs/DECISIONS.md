@@ -283,3 +283,11 @@
 - 결정: 주석 한 줄 추가만 허용한다. 선언, 필드, 열거값, 함수 시그니처는 바꾸지 않는다.
 - 대안: 각 디렉토리 README에만 설명을 둔다.
 - 영향: `src/common/types.h`, `src/downstream/conn.h` (주석만). 컴파일 결과와 테스트 ID 영향 없음.
+
+## D-039 plan_init은 union에서 fd의 -1을 지킨다
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: `plan_init` 명세는 fd들의 -1과 `upstream.conn`의 NULL을 함께 요구하지만 `body`는 union이라 둘이 같은 저장 공간을 쓴다. 구현이 fd를 -1로 쓴 뒤 `conn = NULL`을 써서 `file.fd`, `pipe.out_fd`, `pipe.in_fd`가 0(stdin)이 되었다.
+- 결정: `plan_init`은 fd 쪽 기본값(-1)을 지키고 `conn = NULL`을 쓰지 않는다. `upstream.conn`은 BODY_UPSTREAM으로 바꿀 때 처리기가 채운다(`proxy_on_head`가 이미 그렇게 한다). feat/stage1-sohee의 D-034(제안)와 같은 방향이다.
+- 대안: 본문 종류별 생성 함수 추가, union을 struct로 바꿈 (공개 구조체 변경).
+- 영향: `src/handler/plan.c`, `src/handler/plan.h` (주석). U-HD-01.

@@ -26,7 +26,7 @@ void plan_init(response_plan_t *p)
     p->body.pipe.out_fd = -1;
     p->body.pipe.in_fd = -1;
     p->body.pipe.deadline_ms = -1;
-    p->body.upstream.conn = NULL;
+    /* body는 union이라 upstream.conn = NULL을 쓰면 위 fd들이 0(stdin)으로 덮인다 (D-039). */
 }
 
 void plan_cleanup(response_plan_t *p)
