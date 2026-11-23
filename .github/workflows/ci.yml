@@ -35,6 +35,9 @@ jobs:
       - name: Test (unit + e2e)
         run: make test
 
+      - name: E2E on the v2 event loop engine
+        run: make e2e-loop
+
       - name: ASan + UBSan (Linux)
         if: runner.os == 'Linux'
         run: make asan

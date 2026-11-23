@@ -41,7 +41,7 @@ FMT_FILES := $(wildcard src/*/*.c src/*/*.h tests/unit/*.c tests/unit/*.h \
 
 ONLY_ARG := $(if $(ONLY),--only $(ONLY),)
 
-.PHONY: all unit e2e test lint asan clean
+.PHONY: all unit e2e e2e-loop test lint asan clean
 
 all: $(BIN)
 
@@ -69,6 +69,10 @@ unit: $(UNIT_BIN)
 
 e2e: $(BIN)
 	$(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG)
+
+# 같은 E2E를 v2 이벤트 루프 엔진(-e loop)으로 돌린다 (D-040).
+e2e-loop: $(BIN)
+	HTTPD_ENGINE=loop $(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG)
 
 # unit과 e2e를 모두 돌리고 두 요약 줄을 합친 줄을 마지막에 출력한다.
 test: $(BIN) $(UNIT_BIN)
