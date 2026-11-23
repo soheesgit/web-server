@@ -44,8 +44,6 @@ U-DS-44
 # --- U-RT --- 계약 최소셋: router
 
 # --- U-HD --- 계약 최소셋: handler (plan·static·cgi)
-U-HD-21
-U-HD-26
 
 # --- U-PX --- 계약 최소셋: handler (proxy)
 U-PX-01

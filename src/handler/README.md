@@ -37,5 +37,5 @@
 - [x] plan (+ handler_dispatch)
 - [x] mime
 - [x] static
-- [ ] cgi
+- [x] cgi
 - [ ] proxy
