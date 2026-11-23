@@ -68,9 +68,9 @@ ssize_t platform_send(int fd, const void *p, size_t n)
 #if defined(SO_NOSIGPIPE)
         {
             int one = 1;
-            if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) < 0) {
-                return -1;
-            }
+            /* 실패해도 무시한다. 상대가 닫힌 소켓에서는 macOS가 setsockopt를 거부할 수 있는데,
+             * 그때도 아래 send가 EPIPE를 돌려줘야 한다 (U-CORE-30) */
+            (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
         }
 #endif
         sent = send(fd, p, n, 0);
