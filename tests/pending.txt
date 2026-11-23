@@ -2,31 +2,10 @@
 # 구현 PR에서 통과시킨 ID를 지운다. ID를 추가하지 않는다.
 
 # --- U-CORE --- 계약 최소셋: core
-U-CORE-04
-U-CORE-05
-U-CORE-08
-U-CORE-10
-U-CORE-11
-U-CORE-13
-U-CORE-17
-U-CORE-21
-U-CORE-28
-U-CORE-29
-U-CORE-30
 
 # --- U-COM --- 계약 최소셋: common
-U-COM-07
-U-COM-18
-U-COM-21
-U-COM-26
-U-COM-38
-U-COM-40
 
 # --- U-DS --- 계약 최소셋: downstream
-U-DS-01
-U-DS-06
-U-DS-07
-U-DS-12
 U-DS-30
 U-DS-36
 U-DS-40
@@ -37,7 +16,6 @@ U-RT-02
 U-RT-03
 
 # --- U-HD --- 계약 최소셋: handler (plan·static·cgi)
-U-HD-02
 U-HD-09
 U-HD-11
 U-HD-14
@@ -52,8 +30,6 @@ U-PX-10
 
 # --- U-US --- 계약 최소셋: upstream
 U-US-01
-U-US-09
-U-US-12
 U-US-17
 U-US-24
 
