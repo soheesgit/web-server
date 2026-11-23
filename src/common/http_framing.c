@@ -21,22 +21,95 @@ static bool read_content_length(str_t list, http_framing_t *framing)
     return true;
 }
 
-/* chunked를 만나면 이후 다른 줄을 포함해 추가 코딩을 거부한다. */
-static bool read_transfer_encoding(str_t list, http_framing_t *framing)
+static void skip_ows(str_t *input)
 {
-    if (list.ptr == NULL) {
+    while (input->len > 0 && http_is_ows(input->ptr[0])) {
+        ++input->ptr;
+        --input->len;
+    }
+}
+
+static bool take_char(str_t *input, char expected)
+{
+    if (input->len == 0 || input->ptr[0] != expected) {
         return false;
     }
-    do {
-        str_t coding = http_pop_list_item(&list);
-        if (framing->kind == FRAMING_CHUNKED || !http_token_valid(coding)) {
+    ++input->ptr;
+    --input->len;
+    return true;
+}
+
+static str_t take_token(str_t *input)
+{
+    str_t token = {input->ptr, 0};
+    while (input->len > 0 && http_token_byte_valid((unsigned char)input->ptr[0])) {
+        ++input->ptr;
+        --input->len;
+        ++token.len;
+    }
+    return token;
+}
+
+static bool take_parameter_value(str_t *input)
+{
+    if (!take_char(input, '"')) {
+        return take_token(input).len != 0;
+    }
+
+    /* 인용 값 안의 쉼표는 코딩 구분자가 아니다. 이스케이프한 문자도 값에 포함한다. */
+    while (input->len > 0) {
+        if (take_char(input, '"')) {
+            return true;
+        }
+        (void)take_char(input, '\\');
+        if (input->len == 0 || !http_field_byte_valid((unsigned char)input->ptr[0])) {
             return false;
         }
-        if (str_eq_ci(coding, "chunked")) {
+        ++input->ptr;
+        --input->len;
+    }
+    return false;
+}
+
+static bool take_parameter(str_t *input)
+{
+    skip_ows(input);
+    if (take_token(input).len == 0) {
+        return false;
+    }
+    skip_ows(input);
+    if (!take_char(input, '=')) {
+        return false;
+    }
+    skip_ows(input);
+    return take_parameter_value(input);
+}
+
+/* chunked는 마지막에 한 번만 나온다. 앞선 확장 코딩의 매개변수도 문법에 맞게 읽는다. */
+static bool read_transfer_encoding(str_t list, http_framing_t *framing)
+{
+    do {
+        skip_ows(&list);
+        str_t coding = take_token(&list);
+        if (framing->kind == FRAMING_CHUNKED || coding.len == 0) {
+            return false;
+        }
+        bool is_chunked = str_eq_ci(coding, "chunked");
+        skip_ows(&list);
+        while (take_char(&list, ';')) {
+            if (is_chunked || !take_parameter(&list)) {
+                return false;
+            }
+            skip_ows(&list);
+        }
+        if (is_chunked) {
             framing->kind = FRAMING_CHUNKED;
         }
-    } while (list.ptr != NULL);
-    return true;
+        if (list.len == 0) {
+            return true;
+        }
+    } while (take_char(&list, ','));
+    return false;
 }
 
 int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
@@ -106,7 +179,14 @@ bool http_keep_alive(int minor, const http_headers_t *h)
 typedef enum {
     CHUNK_SIZE,
     CHUNK_BEFORE_EXTENSION,
-    CHUNK_EXTENSION,
+    CHUNK_EXT_NAME_START,
+    CHUNK_EXT_NAME,
+    CHUNK_EXT_AFTER_NAME,
+    CHUNK_EXT_VALUE_START,
+    CHUNK_EXT_TOKEN,
+    CHUNK_EXT_QUOTED,
+    CHUNK_EXT_ESCAPED,
+    CHUNK_EXT_QUOTED_END,
     CHUNK_SIZE_LF,
     CHUNK_DATA,
     CHUNK_DATA_END,
@@ -136,6 +216,14 @@ static chunk_phase_t chunk_size_end(uint64_t size)
     return size != 0 ? CHUNK_DATA : CHUNK_TRAILER_START;
 }
 
+static chunk_phase_t end_size_line(unsigned char c, uint64_t size)
+{
+    if (c == '\r') {
+        return CHUNK_SIZE_LF;
+    }
+    return c == '\n' ? chunk_size_end(size) : CHUNK_INVALID;
+}
+
 /* 크기 줄과 구분자, 트레일러를 한 바이트씩 검사한다. 본문 데이터는 별도로 건너뛴다. */
 static chunk_phase_t read_chunk_metadata(chunk_phase_t phase, unsigned char c, uint64_t *remaining,
                                          int *digits)
@@ -155,26 +243,65 @@ static chunk_phase_t read_chunk_metadata(chunk_phase_t phase, unsigned char c, u
             return CHUNK_BEFORE_EXTENSION;
         }
         if (c == ';') {
-            return CHUNK_EXTENSION;
+            return CHUNK_EXT_NAME_START;
         }
-        if (c == '\r') {
-            return CHUNK_SIZE_LF;
-        }
-        return c == '\n' ? chunk_size_end(*remaining) : CHUNK_INVALID;
+        return end_size_line(c, *remaining);
     }
     case CHUNK_BEFORE_EXTENSION:
         if (c == ';') {
-            return CHUNK_EXTENSION;
+            return CHUNK_EXT_NAME_START;
         }
         return http_is_ows((char)c) ? CHUNK_BEFORE_EXTENSION : CHUNK_INVALID;
-    case CHUNK_EXTENSION:
-        if (c == '\r') {
-            return CHUNK_SIZE_LF;
+    case CHUNK_EXT_NAME_START:
+        if (http_is_ows((char)c)) {
+            return CHUNK_EXT_NAME_START;
         }
-        if (c == '\n') {
-            return chunk_size_end(*remaining);
+        return http_token_byte_valid(c) ? CHUNK_EXT_NAME : CHUNK_INVALID;
+    case CHUNK_EXT_NAME:
+    case CHUNK_EXT_AFTER_NAME:
+        if (c == ';') {
+            return CHUNK_EXT_NAME_START;
         }
-        return http_field_byte_valid(c) ? CHUNK_EXTENSION : CHUNK_INVALID;
+        if (c == '=') {
+            return CHUNK_EXT_VALUE_START;
+        }
+        if (http_is_ows((char)c)) {
+            return CHUNK_EXT_AFTER_NAME;
+        }
+        if (phase == CHUNK_EXT_NAME && http_token_byte_valid(c)) {
+            return CHUNK_EXT_NAME;
+        }
+        return phase == CHUNK_EXT_NAME ? end_size_line(c, *remaining) : CHUNK_INVALID;
+    case CHUNK_EXT_VALUE_START:
+        if (http_is_ows((char)c)) {
+            return CHUNK_EXT_VALUE_START;
+        }
+        if (c == '"') {
+            return CHUNK_EXT_QUOTED;
+        }
+        return http_token_byte_valid(c) ? CHUNK_EXT_TOKEN : CHUNK_INVALID;
+    case CHUNK_EXT_QUOTED:
+        if (c == '"') {
+            return CHUNK_EXT_QUOTED_END;
+        }
+        if (c == '\\') {
+            return CHUNK_EXT_ESCAPED;
+        }
+        return http_field_byte_valid(c) ? CHUNK_EXT_QUOTED : CHUNK_INVALID;
+    case CHUNK_EXT_ESCAPED:
+        return http_field_byte_valid(c) ? CHUNK_EXT_QUOTED : CHUNK_INVALID;
+    case CHUNK_EXT_TOKEN:
+    case CHUNK_EXT_QUOTED_END:
+        if (c == ';') {
+            return CHUNK_EXT_NAME_START;
+        }
+        if (http_is_ows((char)c)) {
+            return CHUNK_BEFORE_EXTENSION;
+        }
+        if (phase == CHUNK_EXT_TOKEN && http_token_byte_valid(c)) {
+            return CHUNK_EXT_TOKEN;
+        }
+        return end_size_line(c, *remaining);
     case CHUNK_SIZE_LF:
         return c == '\n' ? chunk_size_end(*remaining) : CHUNK_INVALID;
     case CHUNK_DATA_END:
