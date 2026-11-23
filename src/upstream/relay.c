@@ -135,20 +135,21 @@ relay_status_t relay_step(relay_t *r, unsigned events, int64_t now_ms)
         r->step = R_HEAD;
         r->deadline = now_ms + r->response_timeout;
     }
-    if (r->step == R_HEAD) {
+    /* 반복문으로 돈다. 읽을 때마다 재귀하면 1바이트씩 흘리는 백엔드가 스택을 깊게 만든다.
+     * 1xx를 버린 뒤에는 이미 받은 바이트에 최종 머리가 있을 수 있어 읽기 전에 다시 파싱한다. */
+    while (r->step == R_HEAD) {
         int status = 502;
         http_parse_result_t pr = response_parse_head(r->conn->rbuf.data, r->conn->rbuf.len,
                                                      r->job->method, &r->lim, &r->resp, &status);
         if (pr == HTTP_PARSE_DONE) {
             if (r->resp.status >= 100 && r->resp.status < 200) {
                 buf_consume(&r->conn->rbuf, r->resp.head_len);
-                r->step = R_HEAD;
                 r->deadline = now_ms + r->response_timeout;
-            } else {
-                r->step = R_OK;
-                r->result = RELAY_OK;
-                return r->result;
+                continue;
             }
+            r->step = R_OK;
+            r->result = RELAY_OK;
+            return r->result;
         } else if (pr == HTTP_PARSE_ERROR) {
             relay_fail(r, PFAIL_BAD_RESPONSE);
             return r->result;
@@ -157,8 +158,11 @@ relay_status_t relay_step(relay_t *r, unsigned events, int64_t now_ms)
             return RELAY_WANT_READ;
         {
             ssize_t n = buf_read_fd(&r->conn->rbuf, r->conn->fd);
-            if (n > 0)
-                return relay_step(r, RELAY_EV_READ, platform_now_ms());
+            if (n > 0) {
+                events = RELAY_EV_READ;
+                now_ms = platform_now_ms();
+                continue;
+            }
             if (n == 0) {
                 /* D-036: 요청을 이미 다 보낸 뒤라 백엔드가 처리했을 수 있다. 멱등한 메서드만 다시
                  * 보낸다. */
