@@ -12,6 +12,7 @@
 | 단위 (나머지) | 추후 | `U-<영역>-NN` | `tests/unit/` | `make unit` |
 | 경계 | 추후 | `C-NN` | (추후 `tests/contract/`) | — |
 | 비기능 | 추후 | `N-<분류>-NN` | (추후 `tests/nonfunc/`) | — |
+| 보조 (성질·공격) | **현재** | ID 체계 밖: 성질 이름, E2E `R-NN` | `tests/robust/` (README 참고) | `make robust` |
 
 영역 약어: `CORE`, `COM`(common), `DS`(downstream), `RT`(router), `HD`(handler: plan·static·mime·cgi), `PX`(handler/proxy), `US`(upstream), `EN`(engine).
 
@@ -54,6 +55,7 @@ FAIL             E-PX-03  hop-by-hop removed  (expected 200, got 502)
 | `build/run_unit --list`, `run_e2e.py --list` | 등록된 ID 목록 |
 | `run_e2e.py -v`, `run_unit -v` | 실패·pending 사유 출력 |
 | `make asan` | ASan + UBSan 빌드(`build-asan/`)로 `make test` |
+| `make robust` | 보조 스위트: 성질 검사 + 공격·경계 E2E를 두 엔진으로, ASan 빌드. pending 없음 |
 
 - **run_unit** (C): 테스트마다 `fork()`한 자식에서 실행하고 자식은 `alarm(5)`를 건다. 시그널 종료(스텁이 돌려준 NULL 역참조 등)와 타임아웃은 실패다. 스텁 상태에서 크래시하는 것이 정상이므로 격리가 필수다.
 - **run_e2e** (Python 표준 라이브러리만): 테스트당 30초 제한. 예외·타임아웃·`ServerStartError`는 실패다. 응답 파서는 `http.client`를 쓰지 않고 직접 구현했다(비정상 응답을 감추지 않도록).
