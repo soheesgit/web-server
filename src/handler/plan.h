@@ -15,7 +15,8 @@
  *
  * 모든 바이트를 0으로 지운 뒤: kind BODY_NONE, head.status 0, head.framing NONE, close false,
  * head_pending false, 모든 fd -1(file.fd, pipe.out_fd, pipe.in_fd), pipe.pid 0,
- * pipe.deadline_ms -1, upstream.conn NULL. head.fields는 0으로 채운 buf_t(아직 할당 없음)이며
+ * pipe.deadline_ms -1. body는 union이라 upstream.conn은 NULL을 보장하지 않는다(BODY_UPSTREAM으로
+ * 바꿀 때 처리기가 채운다, D-039). head.fields는 0으로 채운 buf_t(아직 할당 없음)이며
  * plan_add_header 등이 처음 쓸 때 buf_init한다. 이전 내용은 해제하지 않는다.
  *
  * @param p  계획. NULL 불가

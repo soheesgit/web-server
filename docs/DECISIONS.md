@@ -291,3 +291,11 @@
 - 결정: 공유 정의를 `src/upstream/internal_state.h`에 두고 upstream 디렉토리 안의 .c에서만 include한다. 공개 헤더는 바꾸지 않는다.
 - 대안: 정의를 `upstream.h`에 공개 (다른 디렉토리가 내부 필드에 의존하게 됨), 세 파일을 하나로 합침.
 - 영향: `src/upstream/internal_state.h` (새 파일), `backend.c`, `lb.c`, `pool.c`.
+
+## D-039 plan_init은 union에서 fd의 -1을 지킨다
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: `plan_init` 명세는 fd들의 -1과 `upstream.conn`의 NULL을 함께 요구하지만 `body`는 union이라 둘이 같은 저장 공간을 쓴다. 구현이 fd를 -1로 쓴 뒤 `conn = NULL`을 써서 `file.fd`, `pipe.out_fd`, `pipe.in_fd`가 0(stdin)이 되었다.
+- 결정: `plan_init`은 fd 쪽 기본값(-1)을 지키고 `conn = NULL`을 쓰지 않는다. `upstream.conn`은 BODY_UPSTREAM으로 바꿀 때 처리기가 채운다(`proxy_on_head`가 이미 그렇게 한다). feat/stage1-sohee의 D-034(제안)와 같은 방향이다.
+- 대안: 본문 종류별 생성 함수 추가, union을 struct로 바꿈 (공개 구조체 변경).
+- 영향: `src/handler/plan.c`, `src/handler/plan.h` (주석). U-HD-01.
