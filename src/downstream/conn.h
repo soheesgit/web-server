@@ -57,6 +57,7 @@
 
 /**
  * 클라이언트 연결 하나의 상태 (불투명). 정의는 conn.c.
+ * 역할: 한 클라이언트의 수신·송신 상태와 현재 처리 중인 요청 자원을 관리한다.
  *
  * 생성:   conn_new
  * 소멸:   conn_free
@@ -67,6 +68,7 @@ typedef struct conn conn_t;
 
 /**
  * conn_on_event·conn_on_timeout 후 engine이 할 일.
+ * 역할: 엔진에 다음에 기다릴 이벤트나 연결 종료 여부를 알려준다.
  *
  * 생성:   conn_on_event, conn_on_timeout
  * 소멸:   없음
@@ -82,6 +84,7 @@ typedef enum {
 
 /**
  * 모든 연결이 공유하는 실행 환경 (app이 만든다).
+ * 역할: 연결 처리에 필요한 설정, 요청 크기 제한, 라우터, 이벤트 엔진을 전달한다.
  *
  * 생성:   app_new
  * 소멸:   app_free
