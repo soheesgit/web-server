@@ -9,13 +9,16 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include "core/buf.h"
 #include "fakes/fake_handler.h"
+#include "upstream/relay.h"
 #include "upstream/request_writer.h"
 #include "upstream/response_parser.h"
 #include "upstream/upstream.h"
@@ -144,6 +147,153 @@ static void t_u_us_17(void)
     upstream_registry_free(reg);
 }
 
+/* U-US-29 백엔드: 첫 요청에는 응답하고, 같은 연결의 둘째 요청은 받기만 하고 응답 없이 닫는다.
+ * 그 뒤 새 연결이 오면(재전송) 응답한다. */
+typedef struct {
+    int lfd;
+    int accepted;
+    int requests;
+} drop_backend_t;
+
+static int read_head(int fd)
+{
+    char buf[2048];
+    size_t n = 0;
+    while (n < sizeof(buf)) {
+        struct pollfd p = {fd, POLLIN, 0};
+        ssize_t r;
+        if (poll(&p, 1, 2000) != 1 || (r = read(fd, buf + n, sizeof(buf) - n)) <= 0) {
+            return -1;
+        }
+        n += (size_t)r;
+        for (size_t i = 0; i + 3 < n; i++) {
+            if (memcmp(buf + i, "\r\n\r\n", 4) == 0) {
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
+static void *drop_backend(void *arg)
+{
+    static const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    drop_backend_t *d = arg;
+    struct pollfd p = {d->lfd, POLLIN, 0};
+    int a = accept(d->lfd, NULL, NULL);
+    if (a < 0) {
+        return NULL;
+    }
+    d->accepted++;
+    if (read_head(a) == 0) {
+        d->requests++;
+        if (write(a, ok, sizeof(ok) - 1) < 0) {
+            d->requests = -100; /* 쓰기 실패는 판정에서 드러나게 */
+        }
+    }
+    if (read_head(a) == 0) {
+        d->requests++;
+    }
+    close(a);
+    if (poll(&p, 1, 500) == 1) {
+        int b = accept(d->lfd, NULL, NULL);
+        if (b >= 0) {
+            d->accepted++;
+            if (read_head(b) == 0) {
+                d->requests++;
+                if (write(b, ok, sizeof(ok) - 1) < 0) {
+                    d->requests = -100; /* 쓰기 실패는 판정에서 드러나게 */
+                }
+            }
+            close(b);
+        }
+    }
+    return NULL;
+}
+
+/* 연결 하나를 풀에 데워 둔 뒤, 그 재사용 연결로 method 요청을 보낸 결과를 돌려준다. */
+static void drop_exchange(http_method_t method, drop_backend_t *d, proxy_fail_t *fail,
+                          relay_status_t *out_st)
+{
+    struct sockaddr_in sa;
+    socklen_t sl = sizeof(sa);
+    int one = 1;
+    char err[256] = "";
+    config_t *cfg;
+    upstream_registry_t *reg;
+    proxy_job_t job;
+    http_response_t resp;
+    upstream_conn_t *uc = NULL;
+    pthread_t th;
+    static const char get[] = "GET /x HTTP/1.1\r\nHost: b\r\n\r\n";
+    static const char post[] = "POST /x HTTP/1.1\r\nHost: b\r\nContent-Length: 0\r\n\r\n";
+
+    memset(d, 0, sizeof(*d));
+    d->lfd = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(d->lfd >= 0);
+    CHECK_EQ_INT(setsockopt(d->lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)), 0);
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    CHECK_EQ_INT(bind(d->lfd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+    CHECK_EQ_INT(listen(d->lfd, 8), 0);
+    CHECK_EQ_INT(getsockname(d->lfd, (struct sockaddr *)&sa, &sl), 0);
+    cfg = cfg_with_group(1, ntohs(sa.sin_port));
+    CHECK(cfg != NULL);
+    reg = upstream_registry_new(cfg, err, sizeof(err));
+    CHECK(reg != NULL);
+    CHECK_EQ_INT(pthread_create(&th, NULL, drop_backend, d), 0);
+
+    memset(&job, 0, sizeof(job));
+    job.group = upstream_registry_get(reg, "g");
+    job.backend = upstream_pick(job.group, NULL, fake_now_ms());
+    job.attempts = job.max_attempts = 1;
+    CHECK_EQ_INT(buf_init(&job.request, 256, 4096), 0);
+    /* 1) 첫 요청: 정상 응답을 받고 연결을 풀에 돌려준다 */
+    job.method = HTTP_GET;
+    CHECK_EQ_INT(buf_append(&job.request, get, sizeof(get) - 1), 0);
+    CHECK_EQ_INT(relay_exchange_blocking(&job, &LIM, 1000, 1000, &uc, &resp, fail), RELAY_OK);
+    buf_consume(&uc->rbuf, uc->rbuf.len);
+    upstream_release(uc, true);
+    /* 2) 같은 연결로 둘째 요청: 백엔드가 받기만 하고 닫는다 */
+    uc = NULL;
+    buf_reset(&job.request);
+    job.method = method;
+    if (method == HTTP_POST) {
+        CHECK_EQ_INT(buf_append(&job.request, post, sizeof(post) - 1), 0);
+    } else {
+        CHECK_EQ_INT(buf_append(&job.request, get, sizeof(get) - 1), 0);
+    }
+    *out_st = relay_exchange_blocking(&job, &LIM, 1000, 1000, &uc, &resp, fail);
+    if (uc != NULL) {
+        upstream_release(uc, false);
+    }
+    pthread_join(th, NULL);
+    buf_cleanup(&job.request);
+    upstream_registry_free(reg);
+    free(cfg); /* 한 테스트에서 두 번 만들므로 직접 해제한다 */
+    close(d->lfd);
+}
+
+static void t_u_us_29(void)
+{
+    drop_backend_t d;
+    proxy_fail_t fail = PFAIL_CONNECT;
+    relay_status_t st = RELAY_FAIL;
+
+    /* GET은 멱등이라 새 연결로 한 번 다시 보내 응답을 받는다 (D-036) */
+    drop_exchange(HTTP_GET, &d, &fail, &st);
+    CHECK_EQ_INT(st, RELAY_OK);
+    CHECK_EQ_INT(d.accepted, 2);
+    CHECK_EQ_INT(d.requests, 3);
+    /* POST는 백엔드가 이미 처리했을 수 있어 다시 보내지 않는다 */
+    drop_exchange(HTTP_POST, &d, &fail, &st);
+    CHECK_EQ_INT(st, RELAY_FAIL);
+    CHECK_EQ_INT(fail, PFAIL_BAD_RESPONSE);
+    CHECK_EQ_INT(d.accepted, 1);
+    CHECK_EQ_INT(d.requests, 2);
+}
+
 static void t_u_us_24(void)
 {
     struct sockaddr_in sa;
@@ -209,4 +359,6 @@ void register_upstream_tests(void)
     test_register("U-US-12", "response_parse_head: bad status lines are ERROR", t_u_us_12);
     test_register("U-US-17", "upstream_pick: round robin A B C x3", t_u_us_17);
     test_register("U-US-24", "upstream_release(reusable) then acquire reuses fd", t_u_us_24);
+    test_register("U-US-29", "relay: reused conn dropped before reply, GET retried, POST not",
+                  t_u_us_29);
 }
