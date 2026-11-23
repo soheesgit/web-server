@@ -44,4 +44,4 @@
 - [x] poller_poll
 - [ ] engine_loop (v2)
 
-v1 엔진과 poller 구현은 반영했다. 선택 단계인 v2 event loop는 미구현이며, 현재 엔진 생성은 `ENGINE_EVENT_LOOP`에 `ENOTSUP`을 반환한다. `engine_watch`·`engine_unwatch`도 현재 구현에서 `ENOTSUP`을 반환한다. POSIX 빌드와 테스트는 아직 실행하지 않았다.
+v1 엔진과 poller 구현은 반영했다. 선택 단계인 v2 event loop는 미구현이며, 현재 엔진 생성은 `ENGINE_EVENT_LOOP`에 `ENOTSUP`을 반환한다. `engine_watch`·`engine_unwatch`도 현재 구현에서 `ENOTSUP`을 반환한다. WSL Ubuntu에서 `make`, `make lint`, `make test`를 실행해 통과했다 (2026-11-23). `make asan`은 아직 실행하지 않았다.
