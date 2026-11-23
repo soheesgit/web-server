@@ -42,4 +42,4 @@
 - [x] log
 - [x] platform
 
-소스 구현은 반영했다. POSIX 빌드와 테스트는 아직 실행하지 않았다.
+소스 구현은 반영했다. WSL Ubuntu에서 `make`, `make lint`, `make test`를 실행해 통과했다 (2026-11-23). `make asan`은 아직 실행하지 않았다.
