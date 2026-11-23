@@ -172,7 +172,10 @@ int poller_wait(poller_t *p, poller_event_t *out, int max, int timeout_ms)
             flags |= 1u;
         if (events[i].filter == EVFILT_WRITE)
             flags |= 2u;
-        if ((events[i].flags & (EV_ERROR | EV_EOF)) != 0)
+        /* 읽기 필터의 EV_EOF는 상대의 반쪽 닫기(FIN)라 읽기(1)로만 알린다: 받은 요청은 아직 읽힌다.
+         * 쓰기 필터의 EV_EOF는 더 쓸 수 없다는 뜻이라 오류(4)다. */
+        if ((events[i].flags & EV_ERROR) != 0 ||
+            ((events[i].flags & EV_EOF) != 0 && events[i].filter == EVFILT_WRITE))
             flags |= 4u;
         if (j == (size_t)count) {
             size_t idx = index_of(p, fd);

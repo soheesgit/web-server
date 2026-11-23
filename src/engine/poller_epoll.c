@@ -31,9 +31,10 @@ static bool registered(const poller_t *p, int fd)
 
 static uint32_t to_epoll(unsigned events)
 {
-    uint32_t out = EPOLLRDHUP;
+    uint32_t out = 0;
+    /* RDHUP은 읽기 감시 때만 건다: 레벨 트리거라 쓰기만 기다릴 때 걸면 계속 깨어난다. */
     if (events & 1u)
-        out |= EPOLLIN;
+        out |= EPOLLIN | EPOLLRDHUP;
     if (events & 2u)
         out |= EPOLLOUT;
     return out;
@@ -149,7 +150,8 @@ int poller_wait(poller_t *p, poller_event_t *out, int max, int timeout_ms)
             e |= 1u;
         if (events[i].events & EPOLLOUT)
             e |= 2u;
-        if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP))
+        /* RDHUP(상대의 반쪽 닫기)은 오류가 아니다: 받은 요청을 먼저 읽고 0이 나오면 닫는다. */
+        if (events[i].events & (EPOLLERR | EPOLLHUP))
             e |= 4u;
         out[i] = (poller_event_t){fd, e, registered(p, fd) ? p->items[fd].ptr : NULL};
     }
