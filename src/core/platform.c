@@ -17,7 +17,9 @@
 #if defined(__linux__)
 #include <sys/sendfile.h>
 #elif defined(__APPLE__)
-#include <sys/socket.h>
+/* macOS <sys/socket.h>는 _POSIX_C_SOURCE가 정의되면 sendfile 선언을 숨긴다 */
+struct sf_hdtr;
+int sendfile(int fd, int s, off_t offset, off_t *len, struct sf_hdtr *hdtr, int flags);
 #endif
 
 int platform_set_nonblock(int fd)
