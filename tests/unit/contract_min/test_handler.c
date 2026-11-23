@@ -107,6 +107,27 @@ static void t_u_hd_02(void)
     plan_cleanup(&p);
 }
 
+/* U-HD-03: plan_error — 400~599 밖이면 EINVAL, 기존 close 값을 지키고 HTML 본문을 만든다. */
+static void t_u_hd_03(void)
+{
+    response_plan_t p;
+
+    new_plan(&p);
+    errno = 0;
+    CHECK_EQ_INT(plan_error(&p, 399), -1);
+    CHECK_EQ_INT(errno, EINVAL);
+    errno = 0;
+    CHECK_EQ_INT(plan_error(&p, 600), -1);
+    CHECK_EQ_INT(errno, EINVAL);
+    p.head.close = true;
+    CHECK_EQ_INT(plan_error(&p, 503), 0);
+    CHECK(p.head.close);
+    CHECK_EQ_INT(p.head.status, 503);
+    CHECK_EQ_INT(p.kind, BODY_MEM);
+    CHECK(fields_has(&p, "Content-Type: text/html"));
+    plan_cleanup(&p);
+}
+
 static void t_u_hd_04(void)
 {
     const char *dir = test_tmpdir();
@@ -441,6 +462,7 @@ void register_handler_tests(void)
 {
     test_register("U-HD-01", "plan_init: empty plan and fd sentinels", t_u_hd_01);
     test_register("U-HD-02", "plan_error(404) builds an HTML BODY_MEM plan", t_u_hd_02);
+    test_register("U-HD-03", "plan_error: range check, keeps close, HTML body", t_u_hd_03);
     test_register("U-HD-04", "plan_cleanup closes the file fd, twice is safe", t_u_hd_04);
     test_register("U-HD-09", "static_handle: GET /index.html", t_u_hd_09);
     test_register("U-HD-11", "static_handle: POST is 405 with Allow", t_u_hd_11);

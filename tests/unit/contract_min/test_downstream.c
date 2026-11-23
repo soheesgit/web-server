@@ -117,6 +117,29 @@ static void t_u_ds_22(void)
     CHECK_EQ_STR(out, "\xEA\xB0\x80");
 }
 
+/* U-DS-16: uri_parse_absolute — uri.h의 예시와 거부 규칙. */
+static void t_u_ds_16(void)
+{
+    str_t auth, rest;
+    str_t a = {"http://a.com:8080/x?y", 21};
+    str_t b = {"HTTP://a.com", 12};
+    str_t bad_query = {"http://a.com?x", 14};
+    str_t bad_user = {"http://u@a.com/", 15};
+    str_t bad_empty = {"http:///x", 9};
+    str_t bad_scheme = {"https://a.com/", 14};
+
+    CHECK_EQ_INT(uri_parse_absolute(a, &auth, &rest), 0);
+    CHECK_STR_EQ(auth, "a.com:8080");
+    CHECK_STR_EQ(rest, "/x?y");
+    CHECK_EQ_INT(uri_parse_absolute(b, &auth, &rest), 0); /* 스킴 대소문자 무시, 경로 없으면 "/" */
+    CHECK_STR_EQ(auth, "a.com");
+    CHECK_STR_EQ(rest, "/");
+    CHECK_EQ_INT(uri_parse_absolute(bad_query, &auth, &rest), -1);
+    CHECK_EQ_INT(uri_parse_absolute(bad_user, &auth, &rest), -1);
+    CHECK_EQ_INT(uri_parse_absolute(bad_empty, &auth, &rest), -1);
+    CHECK_EQ_INT(uri_parse_absolute(bad_scheme, &auth, &rest), -1);
+}
+
 static void t_u_ds_27(void)
 {
     char a[] = "/a/./b//c/";
@@ -338,6 +361,7 @@ void register_downstream_tests(void)
     test_register("U-DS-06", "request_parse_head: two pipelined requests", t_u_ds_06);
     test_register("U-DS-07", "request_parse_head: bad token count / double space", t_u_ds_07);
     test_register("U-DS-12", "request_parse_head: Host rules for 1.1 and 1.0", t_u_ds_12);
+    test_register("U-DS-16", "uri_parse_absolute: authority, rest, rejects", t_u_ds_16);
     test_register("U-DS-22", "uri_decode_path: %20 and UTF-8", t_u_ds_22);
     test_register("U-DS-27", "path_normalize: dot, double slash, dotdot", t_u_ds_27);
     test_register("U-DS-28", "path_normalize: escaping root fails", t_u_ds_28);
