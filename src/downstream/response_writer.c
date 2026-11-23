@@ -5,6 +5,7 @@
 #include "downstream/response_writer.h"
 
 #include "common/http_status.h"
+#include "downstream/internal_response.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -17,7 +18,7 @@ static int append_date(buf_t *out, time_t now)
                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     struct tm tm;
 
-    if (gmtime_r(&now, &tm) == NULL) {
+    if (gmtime_r(&now, &tm) == NULL || tm.tm_year < -1900 || tm.tm_year > 8099) {
         errno = EINVAL;
         return -1;
     }
@@ -30,7 +31,7 @@ static int write_head(const http_head_out_t *head, int client_minor, time_t now,
 {
     int status = head->status;
     http_framing_kind_t kind = head->framing.kind;
-    bool no_length = (status >= 100 && status < 200) || status == 204 || status == 304;
+    bool no_body = response_status_has_no_body(status);
     bool close =
         head->close || (kind == FRAMING_CHUNKED && client_minor == 0) || kind == FRAMING_CLOSE;
 
@@ -39,12 +40,12 @@ static int write_head(const http_head_out_t *head, int client_minor, time_t now,
         buf_append(out, head->fields.data, head->fields.len) != 0) {
         return -1;
     }
-    if (kind == FRAMING_LENGTH && !no_length) {
+    if (kind == FRAMING_LENGTH && !no_body) {
         if (buf_appendf(out, "Content-Length: %llu\r\n",
                         (unsigned long long)head->framing.length) != 0) {
             return -1;
         }
-    } else if (kind == FRAMING_CHUNKED && client_minor != 0) {
+    } else if (kind == FRAMING_CHUNKED && !no_body && client_minor != 0) {
         if (buf_appendf(out, "Transfer-Encoding: chunked\r\n") != 0) {
             return -1;
         }

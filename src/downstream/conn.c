@@ -9,6 +9,7 @@
 #include "core/log.h"
 #include "core/platform.h"
 #include "core/stub.h"
+#include "downstream/internal_response.h"
 #include "downstream/request_parser.h"
 #include "downstream/response_writer.h"
 #include "handler/handler.h"
@@ -363,7 +364,9 @@ static void cgi_resolve_head(conn_t *c, int minor, size_t *out_body_off)
         r = cgi_parse_head(c->cgi_out.data, c->cgi_out.len, cfg->cgi_max_head, &h, &used, &st);
         if (r == HTTP_PARSE_DONE) {
             /* D-029: Content-Length가 없으면 1.1은 chunked, 1.0은 연결 종료로 끝낸다 */
-            if (h.framing.kind == FRAMING_NONE) {
+            if (response_status_has_no_body(h.status)) {
+                h.framing = (http_framing_t){FRAMING_NONE, 0};
+            } else if (h.framing.kind == FRAMING_NONE) {
                 h.framing.kind = minor >= 1 ? FRAMING_CHUNKED : FRAMING_CLOSE;
             }
             h.close = p->head.close;
@@ -446,7 +449,7 @@ static int cgi_send_body(conn_t *c, const char *pre, size_t pre_len, uint64_t *s
 /* ── 프록시 (BODY_UPSTREAM) ─────────────────────────────────────────────── */
 
 /* relay를 실행하고 재시도 판단을 따른다. 끝나면 plan은 BODY_UPSTREAM 또는 에러 계획. */
-static void proxy_run(conn_t *c)
+static void proxy_run(conn_t *c, int client_minor)
 {
     const config_t *cfg = c->env->cfg;
 
@@ -459,6 +462,12 @@ static void proxy_run(conn_t *c)
         s = relay_exchange_blocking(&c->job, c->env->lim, cfg->upstream_connect_timeout_ms,
                                     cfg->upstream_response_timeout_ms, &uc, &resp, &why);
         if (s == RELAY_OK) {
+            /* D-034: HTTP/1.0에 청크 구분자가 포함된 본문을 보내지 않는다. */
+            if (client_minor == 0 && resp.framing.kind == FRAMING_CHUNKED) {
+                upstream_release(uc, false);
+                (void)plan_error(&c->plan, 502);
+                return;
+            }
             c->up_head_len = resp.head_len;
             c->up_reusable = resp.keep_alive;
             (void)proxy_on_head(&c->job, uc, &resp, &c->plan);
@@ -527,6 +536,15 @@ static int upstream_send_body(conn_t *c, uint64_t *sent)
 
 /* ── 요청 하나 ───────────────────────────────────────────────────────────── */
 
+/* D-035: HTTP 머리 한도를 넘긴 바이너리 시작 줄은 응답 없이 닫는다. */
+static bool binary_start_line(const buf_t *input)
+{
+    const char *lf = memchr(input->data, '\n', input->len);
+    size_t len = lf != NULL ? (size_t)(lf - input->data) : input->len;
+
+    return memchr(input->data, '\0', len) != NULL;
+}
+
 /* 요청 머리를 받을 때까지 읽는다. 1 DONE, 0 닫기(응답 없음 또는 에러 응답 완료). */
 static int recv_head(conn_t *c, http_request_t *req)
 {
@@ -541,6 +559,9 @@ static int recv_head(conn_t *c, http_request_t *req)
             return 1;
         }
         if (r == HTTP_PARSE_ERROR) {
+            if (st == 431 && binary_start_line(&c->rbuf)) {
+                return 0;
+            }
             return respond_error(c, st, 1);
         }
         dl = (c->rbuf.len == 0 && c->idle_deadline_ms >= 0) ? c->idle_deadline_ms
@@ -559,6 +580,7 @@ static int recv_head(conn_t *c, http_request_t *req)
 /* Content-Length 본문이 다 모일 때까지 읽는다. 1 완료, 0 닫기. */
 static int recv_body(conn_t *c, http_request_t *req)
 {
+    size_t head_len = req->head_len;
     size_t need;
     int64_t dl;
     int st = 0;
@@ -566,7 +588,10 @@ static int recv_body(conn_t *c, http_request_t *req)
     if (req->framing.kind != FRAMING_LENGTH || req->framing.length == 0) {
         return 1;
     }
-    need = req->head_len + (size_t)req->framing.length;
+    if (req->framing.length > c->rbuf.max - head_len) {
+        return respond_error(c, 413, req->minor);
+    }
+    need = head_len + (size_t)req->framing.length;
     if (c->rbuf.len < need) {
         dl = platform_now_ms() + c->env->cfg->body_timeout_ms;
         while (c->rbuf.len < need) {
@@ -580,7 +605,10 @@ static int recv_body(conn_t *c, http_request_t *req)
             }
         }
         /* 읽는 동안 rbuf가 재할당됐을 수 있다. 같은 머리를 다시 파싱해 str_t를 새로 잡는다 */
-        (void)request_parse_head(c->rbuf.data, c->rbuf.len, c->env->lim, req, &st);
+        int minor = req->minor;
+        if (request_parse_head(c->rbuf.data, head_len, c->env->lim, req, &st) != HTTP_PARSE_DONE) {
+            return respond_error(c, 500, minor);
+        }
     }
     req->body.ptr = c->rbuf.data + req->head_len;
     req->body.len = (size_t)req->framing.length;
@@ -605,7 +633,7 @@ static void build_plan(conn_t *c, const http_request_t *req, size_t *out_cgi_bod
     ctx.now = platform_wall_time();
     ctx.now_ms = platform_now_ms();
     if (handler_dispatch(req, rt, &ctx, &c->job, &c->plan) == HANDLER_NEED_UPSTREAM) {
-        proxy_run(c);
+        proxy_run(c, req->minor);
     }
     if (c->plan.kind == BODY_PIPE && c->plan.head_pending) {
         cgi_resolve_head(c, req->minor, out_cgi_body_off);
@@ -615,7 +643,7 @@ static void build_plan(conn_t *c, const http_request_t *req, size_t *out_cgi_bod
 static int send_response(conn_t *c, const http_request_t *req, size_t cgi_body_off, uint64_t *sent)
 {
     response_plan_t *p = &c->plan;
-    bool with_body = req->method != HTTP_HEAD;
+    bool with_body = req->method != HTTP_HEAD && !response_status_has_no_body(p->head.status);
 
     if (send_head_and_mem(c, req->minor, with_body, sent) != 0) {
         return -1;
@@ -629,7 +657,9 @@ static int send_response(conn_t *c, const http_request_t *req, size_t cgi_body_o
                                          c->cgi_out.len - cgi_body_off, sent)
                          : 0;
     case BODY_UPSTREAM:
-        /* HEAD면 proxy_on_head가 framing NONE으로 두어 추적기가 바로 DONE */
+        if (!with_body && p->body.upstream.tracker.f.kind != FRAMING_NONE) {
+            return 0;
+        }
         return upstream_send_body(c, sent);
     case BODY_NONE:
     case BODY_MEM:
@@ -695,9 +725,14 @@ static bool serve_one(conn_t *c)
 
 conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *env, int64_t now_ms)
 {
-    conn_t *c = calloc(1, sizeof(*c));
+    conn_t *c;
     int e;
 
+    if (env->lim->max_body > SIZE_MAX - env->lim->max_head) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    c = calloc(1, sizeof(*c));
     if (c == NULL) {
         errno = ENOMEM;
         return NULL;
