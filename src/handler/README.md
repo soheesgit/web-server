@@ -34,8 +34,10 @@
 
 ## 구현 단계
 3단계 STATIC·CGI: B `cgi` · C `plan`, `static`, `mime`. 4단계 PROXY: B `proxy`.
-- [ ] plan (+ handler_dispatch)
-- [ ] mime
-- [ ] static
-- [ ] cgi
-- [ ] proxy
+- [x] plan (+ handler_dispatch)
+- [x] mime
+- [x] static
+- [x] cgi
+- [x] proxy
+
+소스 구현은 반영했다. 선택 기능인 E-ST-12(If-Modified-Since 304)는 미구현이다. POSIX 빌드와 테스트는 아직 실행하지 않았다.

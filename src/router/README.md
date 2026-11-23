@@ -29,4 +29,6 @@ I/O 금지. `router_new`·`router_free`는 `[main-only]`, `router_match`는 `[th
 
 ## 구현 단계
 3단계 (`router` + `handler` STATIC·CGI). 분담: A `router`.
-- [ ] router
+- [x] router
+
+소스 구현은 반영했다. POSIX 빌드와 테스트는 아직 실행하지 않았다.

@@ -38,8 +38,10 @@
 
 ## 구현 단계
 5단계 `engine` v1: B `engine_pool`. 7단계(선택) v2: A `poller_*` · C `engine_loop`.
-- [ ] engine_pool (v1)
-- [ ] poller_epoll
-- [ ] poller_kqueue
-- [ ] poller_poll
+- [x] engine_pool (v1)
+- [x] poller_epoll
+- [x] poller_kqueue
+- [x] poller_poll
 - [ ] engine_loop (v2)
+
+v1 엔진과 poller 구현은 반영했다. 선택 단계인 v2 event loop는 미구현이며, 현재 엔진 생성은 `ENGINE_EVENT_LOOP`에 `ENOTSUP`을 반환한다. `engine_watch`·`engine_unwatch`도 현재 구현에서 `ENOTSUP`을 반환한다. POSIX 빌드와 테스트는 아직 실행하지 않았다.

@@ -31,5 +31,7 @@
 ## 구현 단계
 5단계 `engine` v1 + `app`. 분담: A `app`, `main`(시그널) · C E2E 스위트 연결.
 - [x] main — `--help`와 스텁 종료 (initial commit, 7.3절 예외)
-- [ ] main — 전체 흐름
-- [ ] app
+- [x] main — 전체 흐름
+- [x] app
+
+소스 구현은 반영했다. POSIX 빌드와 테스트는 아직 실행하지 않았다. 현재 app 설정은 v1 스레드 풀 엔진을 사용한다.

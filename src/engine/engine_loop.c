@@ -1,24 +1,33 @@
 /* src/engine/engine_loop.c
  *
- * v2 이벤트 루프와 추가 fd 등록. 명세: engine.h
+ * v2 이벤트 루프는 선택 단계이며 현재 서버 엔진은 v1 스레드 풀만 지원한다.
+ * 이벤트 루프를 선택하지 못하게 engine_new에서 ENOTSUP을 반환한다. 이 파일은
+ * 공개 추가-fd API도 명시적으로 같은 상태를 반환해 미구현 동작을 숨기지 않는다.
  */
 #include "engine/engine.h"
-#include "core/stub.h"
+
+#include <errno.h>
 
 int engine_watch(engine_t *e, int fd, unsigned events, void *obj)
 {
-    UNUSED(e);
-    UNUSED(fd);
-    UNUSED(events);
-    UNUSED(obj);
-    /* TODO(engine): 구현 — (테스트 없음) */
-    STUB_RETURN(-1);
+    (void)fd;
+    (void)events;
+    (void)obj;
+    if (e == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    errno = ENOTSUP;
+    return -1;
 }
 
 int engine_unwatch(engine_t *e, int fd)
 {
-    UNUSED(e);
-    UNUSED(fd);
-    /* TODO(engine): 구현 — (테스트 없음) */
-    STUB_RETURN(-1);
+    (void)fd;
+    if (e == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    errno = ENOTSUP;
+    return -1;
 }
