@@ -41,3 +41,8 @@ jobs:
       - name: ASan + UBSan (Linux)
         if: runner.os == 'Linux'
         run: make asan
+
+      # 기획서 ID 밖의 보조 스위트: 성질 검사 + 공격·경계 E2E (tests/robust/README.md)
+      - name: Robustness suite (Linux)
+        if: runner.os == 'Linux'
+        run: make robust
