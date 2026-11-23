@@ -330,11 +330,15 @@ static int poll_cgi_fds(conn_t *c)
         fds[count].revents = 0;
         count++;
     }
-    client_index = (int)count;
-    fds[count].fd = c->fd;
-    fds[count].events = POLLIN;
-    fds[count].revents = 0;
-    count++;
+    /* 다음 요청 바이트가 이미 와 있으면 POLLIN이 계속 켜져 poll이 바로 돌아온다(바쁜 반복).
+     * 그때부터는 클라이언트를 감시하지 않는다 (끊김은 응답을 쓸 때 알게 된다). */
+    if (!c->client_quiet) {
+        client_index = (int)count;
+        fds[count].fd = c->fd;
+        fds[count].events = POLLIN;
+        fds[count].revents = 0;
+        count++;
+    }
     if (count == 0) {
         errno = EPIPE;
         return -1;
@@ -357,12 +361,12 @@ static int poll_cgi_fds(conn_t *c)
     if (rc < 0) {
         return -1;
     }
-    if ((fds[client_index].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+    if (client_index >= 0 && (fds[client_index].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
         errno = EPIPE;
         return -1;
     }
 
-    if ((fds[client_index].revents & POLLIN) != 0) {
+    if (client_index >= 0 && (fds[client_index].revents & POLLIN) != 0) {
         char byte;
         ssize_t n;
 
@@ -376,6 +380,9 @@ static int poll_cgi_fds(conn_t *c)
         }
         if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             return -1;
+        }
+        if (n > 0) {
+            c->client_quiet = true;
         }
     }
     /* stdin 버퍼는 일부만 쓸 수 있으므로 보낸 만큼만 consume한다. */
@@ -614,6 +621,20 @@ static int dispatch_request(conn_t *c, int64_t now_ms)
     return start_response(c, now_ms);
 }
 
+/* 역할: 출력이 끝난 CGI 자식을 기다리지 않고 회수해 본다. 남으면 plan_cleanup이 SIGKILL 후
+ * 회수한다. 비정상 종료면 응답 뒤 연결을 닫는다. */
+static void cgi_reap(conn_t *c)
+{
+    int status = 0;
+    pid_t pid = c->plan.body.pipe.pid;
+    if (pid > 0 && waitpid(pid, &status, WNOHANG) == pid) {
+        c->plan.body.pipe.pid = 0;
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            c->force_close = true;
+        }
+    }
+}
+
 /* 역할: CGI stdout 본문을 framing 규칙에 맞춰 클라이언트로 중계하고 자식을 회수한다. */
 static int send_pipe_body(conn_t *c)
 {
@@ -694,30 +715,10 @@ static int send_pipe_body(conn_t *c)
             return -1;
         }
     }
-    /* stdout EOF 뒤 자식 종료 코드를 회수해 좀비 프로세스를 남기지 않는다. */
-    if (eof && c->plan.body.pipe.pid > 0) {
-        int child_status = 0;
-        for (;;) {
-            pid_t waited = waitpid(c->plan.body.pipe.pid, &child_status, WNOHANG);
-            if (waited == c->plan.body.pipe.pid) {
-                c->plan.body.pipe.pid = 0;
-                if (!WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0) {
-                    errno = ECHILD;
-                    return -1;
-                }
-                break;
-            }
-            if (waited < 0 && errno != EINTR) {
-                c->plan.body.pipe.pid = 0;
-                return -1;
-            }
-            if (c->plan.body.pipe.deadline_ms >= 0 &&
-                platform_now_ms() >= c->plan.body.pipe.deadline_ms) {
-                errno = ETIMEDOUT;
-                return -1;
-            }
-            (void)poll(NULL, 0, 10);
-        }
+    /* stdout을 닫고도 남아 있는 자식을 마감까지 기다리면 워커가 그동안 묶인다. 여기서는 한 번만
+     * 회수해 보고, 남으면 plan_cleanup이 SIGKILL 후 회수한다(좀비 없음). */
+    if (eof) {
+        cgi_reap(c);
     }
     return 0;
 }
@@ -967,19 +968,6 @@ static conn_status_t send_plan(conn_t *c, int64_t now_ms)
 static conn_status_t v2_wait(const conn_t *c)
 {
     return c->client_quiet ? CONN_WAIT_FD : CONN_WANT_READ;
-}
-
-/* 역할: 출력이 끝난 CGI 자식을 기다리지 않고 회수해 본다. 남으면 plan_cleanup이 회수한다. */
-static void cgi_reap(conn_t *c)
-{
-    int status = 0;
-    pid_t pid = c->plan.body.pipe.pid;
-    if (pid > 0 && waitpid(pid, &status, WNOHANG) == pid) {
-        c->plan.body.pipe.pid = 0;
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            c->force_close = true;
-        }
-    }
 }
 
 /* 역할: CGI stdout에서 본문을 한 번 읽어 framing에 맞춰 wbuf에 붙인다.
