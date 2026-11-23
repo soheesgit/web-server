@@ -3,11 +3,47 @@
  * 확장자 → Content-Type. 명세: mime.h
  */
 #include "handler/mime.h"
-#include "core/stub.h"
+
+#include <string.h>
+
+#include "core/str.h"
 
 const char *mime_for_path(const char *path)
 {
-    UNUSED(path);
-    /* TODO(handler): 구현 — U-HD-09, E-ST-01, E-ST-02 */
-    STUB_RETURN("");
+    static const struct {
+        const char *extension;
+        const char *type;
+    } types[] = {
+        {"html", "text/html; charset=utf-8"},
+        {"htm", "text/html; charset=utf-8"},
+        {"css", "text/css; charset=utf-8"},
+        {"js", "text/javascript; charset=utf-8"},
+        {"mjs", "text/javascript; charset=utf-8"},
+        {"txt", "text/plain; charset=utf-8"},
+        {"json", "application/json"},
+        {"svg", "image/svg+xml"},
+        {"png", "image/png"},
+        {"jpg", "image/jpeg"},
+        {"jpeg", "image/jpeg"},
+        {"gif", "image/gif"},
+        {"ico", "image/x-icon"},
+        {"webp", "image/webp"},
+        {"pdf", "application/pdf"},
+        {"woff2", "font/woff2"},
+        {"mp4", "video/mp4"},
+        {"gz", "application/gzip"},
+    };
+    const char *slash = strrchr(path, '/');
+    const char *name = slash == NULL ? path : slash + 1;
+    const char *dot = strrchr(name, '.');
+
+    if (dot != NULL && dot != name) {
+        str_t extension = str_from_cstr(dot + 1);
+        for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
+            if (str_eq_ci(extension, types[i].extension)) {
+                return types[i].type;
+            }
+        }
+    }
+    return "application/octet-stream";
 }

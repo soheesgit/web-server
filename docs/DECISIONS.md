@@ -267,3 +267,21 @@
 - 결정: develop의 `README.md`를 main과 같은 내용(과제 요구사항)으로 되돌린다. 빌드·실행·테스트 방법은 `docs/TESTING.md`와 `tests/README.md`, 디렉토리 안내는 `docs/ARCHITECTURE.md`와 각 `src/<dir>/README.md`, 협업 규칙은 `AGENTS.md`와 `docs/CONVENTIONS.md`에서 본다.
 - 대안: 프로젝트 안내를 README 앞에 두고 과제 요구사항을 부록으로 둠 (D-028).
 - 영향: `README.md`.
+
+## D-032 빈 응답 계획에서 union의 초기 상태
+
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: `plan_init` 주석의 fd 초기값과 `body.upstream.conn`의 NULL은 같은 union 저장 공간에 동시에 둘 수 없다.
+- 결정: `BODY_NONE`은 본문 자원을 소유하지 않는다. 이 상태에서는 fd·마감 초기값을 기록하고, 활성 멤버는 처리기가 종류를 지정할 때 초기화한다.
+- 대안: 본문 저장 공간을 구조체로 바꾸어 모든 필드를 동시에 초기화.
+- 영향: `handler/plan.c`. U-HD-01, U-HD-04.
+
+## D-033 CGI 출력의 잘못된 길이 및 중복 상태
+
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: CGI 응답에 `Content-Length`가 없을 때의 규칙은 D-029에 있으나 잘못된 길이, 서로 다른 길이가 반복되는 경우, 상태가 중복되는 경우는 명시되지 않았다.
+- 결정: 잘못된 길이, 충돌하는 길이, 중복 `Status`는 CGI 응답 오류(502)로 처리한다.
+- 대안: 오류가 있는 항목을 버리고 나머지 헤더만 사용.
+- 영향: `handler/cgi.c`. U-HD-26~30, E-CG-05.
