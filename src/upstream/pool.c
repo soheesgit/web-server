@@ -16,8 +16,10 @@
 
 static void conn_destroy(upstream_conn_t *c)
 {
-    if (c == NULL) return;
-    if (c->fd >= 0) (void)close(c->fd);
+    if (c == NULL)
+        return;
+    if (c->fd >= 0)
+        (void)close(c->fd);
     buf_cleanup(&c->rbuf);
     free(c);
 }
@@ -26,12 +28,19 @@ static int conn_new(backend_t *b, upstream_conn_t **out)
 {
     upstream_conn_t *c = calloc(1, sizeof(*c));
     int one = 1;
-    if (c == NULL) return -1;
+    if (c == NULL)
+        return -1;
     c->fd = -1;
     c->backend = b;
-    if (buf_init(&c->rbuf, 16384, 1024u * 1024u) != 0) { free(c); return -1; }
+    if (buf_init(&c->rbuf, 16384, 1024u * 1024u) != 0) {
+        free(c);
+        return -1;
+    }
     c->fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (c->fd < 0) { conn_destroy(c); return -1; }
+    if (c->fd < 0) {
+        conn_destroy(c);
+        return -1;
+    }
     if (platform_set_cloexec(c->fd) != 0 || platform_set_nonblock(c->fd) != 0 ||
         setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) != 0) {
         int saved = errno;
@@ -56,7 +65,10 @@ static int conn_new(backend_t *b, upstream_conn_t **out)
 
 int upstream_acquire(upstream_group_t *g, backend_t *b, upstream_conn_t **out_c)
 {
-    if (g == NULL || b == NULL || out_c == NULL) { errno = EINVAL; return -1; }
+    if (g == NULL || b == NULL || out_c == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
     for (;;) {
         idle_node_t *node;
         ssize_t n;
@@ -68,7 +80,8 @@ int upstream_acquire(upstream_group_t *g, backend_t *b, upstream_conn_t **out_c)
             b->idle_count--;
         }
         pthread_mutex_unlock(&b->lock);
-        if (node == NULL) break;
+        if (node == NULL)
+            break;
         n = recv(node->conn->fd, &peek_byte, 1, MSG_PEEK | MSG_DONTWAIT);
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             upstream_conn_t *c = node->conn;
@@ -89,10 +102,18 @@ int upstream_connect_result(upstream_conn_t *c)
 {
     int err = 0;
     socklen_t len = sizeof(err);
-    if (c == NULL) { errno = EINVAL; return -1; }
-    if (!c->connecting) return 0;
-    if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0) return -1;
-    if (err != 0) { errno = err; return -1; }
+    if (c == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!c->connecting)
+        return 0;
+    if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0)
+        return -1;
+    if (err != 0) {
+        errno = err;
+        return -1;
+    }
     c->connecting = false;
     return 0;
 }
@@ -102,7 +123,8 @@ void upstream_release(upstream_conn_t *c, bool reusable)
     int saved = errno;
     idle_node_t *node = NULL;
     backend_t *b;
-    if (c == NULL) return;
+    if (c == NULL)
+        return;
     b = c->backend;
     if (reusable && !c->connecting && b != NULL) {
         node = malloc(sizeof(*node));

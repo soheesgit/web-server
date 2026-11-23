@@ -33,9 +33,9 @@
 /*
  * 이 파일의 역할: 요청 수신부터 계획 실행, 응답 송신, keep-alive 판정까지 연결 하나를 조정한다.
  * 구현 상태: v1 blocking 경로는 CGI pipe와 upstream relay 본문까지 연결한다. v2 이벤트 경로는
- * 메모리/파일 응답을 처리하지만 CGI와 proxy의 비동기 fd 상태 머신은 미완성이다. 그 요청은 500을 보낸다.
- * 의존 상태: 이 파일은 core/router/handler/upstream/engine 공개 API를 호출한다. 현재 저장소의
- * 해당 디렉터리에는 스텁이 남아 있어, 그 부분까지 구현해야 서버 실행이 이어진다.
+ * 메모리/파일 응답을 처리하지만 CGI와 proxy의 비동기 fd 상태 머신은 미완성이다. 그 요청은 500을
+ * 보낸다. 의존 상태: 이 파일은 core/router/handler/upstream/engine 공개 API를 호출한다. 현재
+ * 저장소의 해당 디렉터리에는 스텁이 남아 있어, 그 부분까지 구현해야 서버 실행이 이어진다.
  */
 /* 현재 연결 단계: 요청 받기, 응답 보내기, 닫힘. */
 typedef enum { CONN_READING, CONN_WRITING, CONN_FINISHED } conn_phase_t;
@@ -45,34 +45,35 @@ typedef enum { CONN_READING, CONN_WRITING, CONN_FINISHED } conn_phase_t;
  * rbuf는 req의 문자열 뷰가 살아 있는 동안 consume/재할당하지 않는다.
  */
 struct conn {
-    int fd;                         /* 클라이언트 소켓. 연결 정리 때 닫는다. */
-    struct sockaddr_storage peer;   /* accept 단계에서 받은 상대 주소 사본 */
-    bool have_peer;                 /* peer 주소가 있는지 */
+    int fd;                           /* 클라이언트 소켓. 연결 정리 때 닫는다. */
+    struct sockaddr_storage peer;     /* accept 단계에서 받은 상대 주소 사본 */
+    bool have_peer;                   /* peer 주소가 있는지 */
     char client_ip[INET6_ADDRSTRLEN]; /* 접근 로그와 처리기 문맥에 넘길 주소 문자열 */
-    conn_env_t env;                 /* 서버 설정·라우터·엔진을 빌린 실행 문맥 */
-    buf_t rbuf;                     /* 요청 머리·본문·파이프라인 다음 요청을 보관 */
-    buf_t wbuf;                     /* 아직 클라이언트에 쓰지 못한 응답 바이트 */
-    buf_t pipe_buf;                 /* CGI 출력에서 읽은 머리와 본문 앞부분 */
-    http_request_t req;             /* 현재 요청. 문자열 뷰는 rbuf를 빌린다. */
-    response_plan_t plan;           /* 현재 응답의 머리·본문 출처와 소유 자원 */
-    proxy_job_t job;                /* 현재 요청이 프록시일 때 재시도 상태 */
-    conn_phase_t phase;             /* 연결 상태 머신의 현재 단계 */
-    int64_t deadline_ms;            /* 현재 읽기·쓰기 단계의 단조 시계 마감 */
-    int64_t request_start_ms;       /* 접근 로그 처리 시간의 시작점 */
-    size_t request_bytes;           /* 현재 요청이 rbuf에서 차지하는 총 길이 */
-    size_t body_pos;                /* BODY_MEM 전송에서 다음에 보낼 위치 */
-    off_t file_off;                 /* BODY_FILE 전송에서 다음 파일 오프셋 */
-    uint64_t response_bytes;        /* 로그에 기록할 실제 응답 본문 바이트 */
-    uint64_t request_count;         /* 이 연결에서 완료한 요청 수 */
-    bool head_ready;                /* 미완성/미사용: 현재 코드에서는 읽지 않는 보조 플래그 */
-    bool force_close;               /* 현재 응답 뒤 연결을 닫아야 하는지 */
-    bool parser_error;              /* 기록용 상태. 현재 코드에서는 이후 분기에 사용하지 않는다. */
-    bool drain_after_write;         /* 오류 응답 뒤 입력을 비워 RST를 줄인다. */
-    bool upstream_keep_alive;       /* 백엔드 응답이 연결 재사용을 허용했는지 */
-    bool plan_ready;                /* plan_init이 끝나 plan_cleanup이 가능한지 */
-    bool body_deadline_set;         /* 본문 마감을 한 번만 계산했는지 */
-    bool header_deadline_set;       /* 헤더 마감을 한 번만 계산했는지 */
-    http_response_t upstream_resp;  /* relay 응답 머리 사본. 현재는 보관 후 별도 처리에 쓰지 않는다. */
+    conn_env_t env;                   /* 서버 설정·라우터·엔진을 빌린 실행 문맥 */
+    buf_t rbuf;               /* 요청 머리·본문·파이프라인 다음 요청을 보관 */
+    buf_t wbuf;               /* 아직 클라이언트에 쓰지 못한 응답 바이트 */
+    buf_t pipe_buf;           /* CGI 출력에서 읽은 머리와 본문 앞부분 */
+    http_request_t req;       /* 현재 요청. 문자열 뷰는 rbuf를 빌린다. */
+    response_plan_t plan;     /* 현재 응답의 머리·본문 출처와 소유 자원 */
+    proxy_job_t job;          /* 현재 요청이 프록시일 때 재시도 상태 */
+    conn_phase_t phase;       /* 연결 상태 머신의 현재 단계 */
+    int64_t deadline_ms;      /* 현재 읽기·쓰기 단계의 단조 시계 마감 */
+    int64_t request_start_ms; /* 접근 로그 처리 시간의 시작점 */
+    size_t request_bytes;     /* 현재 요청이 rbuf에서 차지하는 총 길이 */
+    size_t body_pos;          /* BODY_MEM 전송에서 다음에 보낼 위치 */
+    off_t file_off;           /* BODY_FILE 전송에서 다음 파일 오프셋 */
+    uint64_t response_bytes;  /* 로그에 기록할 실제 응답 본문 바이트 */
+    uint64_t request_count;   /* 이 연결에서 완료한 요청 수 */
+    bool head_ready; /* 미완성/미사용: 현재 코드에서는 읽지 않는 보조 플래그 */
+    bool force_close; /* 현재 응답 뒤 연결을 닫아야 하는지 */
+    bool parser_error; /* 기록용 상태. 현재 코드에서는 이후 분기에 사용하지 않는다. */
+    bool drain_after_write;   /* 오류 응답 뒤 입력을 비워 RST를 줄인다. */
+    bool upstream_keep_alive; /* 백엔드 응답이 연결 재사용을 허용했는지 */
+    bool plan_ready;          /* plan_init이 끝나 plan_cleanup이 가능한지 */
+    bool body_deadline_set;   /* 본문 마감을 한 번만 계산했는지 */
+    bool header_deadline_set; /* 헤더 마감을 한 번만 계산했는지 */
+    http_response_t
+        upstream_resp; /* relay 응답 머리 사본. 현재는 보관 후 별도 처리에 쓰지 않는다. */
 };
 
 /* 역할: 설정된 상대 timeout을 deadline 단조 시각으로 바꾼다. 음수/넘침이면 마감 없음(-1)이다. */
@@ -114,7 +115,8 @@ static void save_client_ip(conn_t *c)
     } else if (c->peer.ss_family == AF_INET6) {
         addr = &((const struct sockaddr_in6 *)&c->peer)->sin6_addr;
     }
-    if (addr == NULL || inet_ntop(c->peer.ss_family, addr, c->client_ip, sizeof(c->client_ip)) == NULL) {
+    if (addr == NULL ||
+        inet_ntop(c->peer.ss_family, addr, c->client_ip, sizeof(c->client_ip)) == NULL) {
         (void)snprintf(c->client_ip, sizeof(c->client_ip), "-");
     }
 }
@@ -296,8 +298,8 @@ static int poll_cgi_fds(conn_t *c)
         return -1;
     }
     if ((fds[client_index].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-    errno = EPIPE;
-    return -1;
+        errno = EPIPE;
+        return -1;
     }
 
     if ((fds[client_index].revents & POLLIN) != 0) {
@@ -373,9 +375,9 @@ static int collect_cgi_head(conn_t *c)
     buf_reset(&c->pipe_buf);
     for (;;) {
         /* 파서는 INCOMPLETE일 수 있다. 그때는 더 읽고, DONE이면 used 뒤가 응답 본문이다. */
-        http_parse_result_t result = cgi_parse_head(c->pipe_buf.data, c->pipe_buf.len,
-                                                    c->env.cfg->cgi_max_head, &parsed_head, &used,
-                                                    &status);
+        http_parse_result_t result =
+            cgi_parse_head(c->pipe_buf.data, c->pipe_buf.len, c->env.cfg->cgi_max_head,
+                           &parsed_head, &used, &status);
         if (result == HTTP_PARSE_DONE) {
             bool keep_close = c->plan.head.close;
             /* CGI 상태·헤더를 클라이언트 응답 계획으로 옮기고 본문 앞부분은 남긴다. */
@@ -417,9 +419,9 @@ static int proxy_exchange(conn_t *c, int64_t now_ms)
         upstream_conn_t *uc = NULL;
         http_response_t resp;
         proxy_fail_t fail = PFAIL_CONNECT;
-        relay_status_t st = relay_exchange_blocking(
-            &c->job, c->env.lim, c->env.cfg->upstream_connect_timeout_ms,
-            c->env.cfg->upstream_response_timeout_ms, &uc, &resp, &fail);
+        relay_status_t st =
+            relay_exchange_blocking(&c->job, c->env.lim, c->env.cfg->upstream_connect_timeout_ms,
+                                    c->env.cfg->upstream_response_timeout_ms, &uc, &resp, &fail);
         if (st == RELAY_OK) {
             if (proxy_on_head(&c->job, uc, &resp, &c->plan) != 0) {
                 return 0;
@@ -475,23 +477,22 @@ static int dispatch_request(conn_t *c, int64_t now_ms)
         }
     }
     /* 처리기가 유효한 상태를 만들었는지 확인하고, 응답 뒤 닫을 조건을 머리에 반영한다. */
-    if (!c->plan.head_pending &&
-        (c->plan.head.status < 100 || c->plan.head.status > 599)) {
+    if (!c->plan.head_pending && (c->plan.head.status < 100 || c->plan.head.status > 599)) {
         return set_error_plan(c, 500, false);
     }
-    if (c->env.nonblocking && (c->plan.head_pending || c->plan.kind == BODY_PIPE ||
-                            c->plan.kind == BODY_UPSTREAM)) {
+    if (c->env.nonblocking &&
+        (c->plan.head_pending || c->plan.kind == BODY_PIPE || c->plan.kind == BODY_UPSTREAM)) {
         if (set_error_plan(c, 500, false) != 0) {
             return -1;
         }
     }
     if (c->plan.head_pending) {
         int cgi_status = collect_cgi_head(c);
-    if (cgi_status != 0) {
-        if (set_error_plan(c, cgi_status, false) != 0) {
-            return -1;
+        if (cgi_status != 0) {
+            if (set_error_plan(c, cgi_status, false) != 0) {
+                return -1;
+            }
         }
-    }
     }
     if (!c->req.keep_alive ||
         (c->env.cfg->max_keepalive_requests > 0 &&
@@ -779,8 +780,8 @@ static conn_status_t flush_response(conn_t *c, int64_t now_ms)
     if (c->req.method != HTTP_HEAD && c->plan.kind == BODY_MEM) {
         size_t total = c->plan.body.mem.data.len;
         while (c->body_pos < total) {
-            ssize_t n = platform_send(c->fd, c->plan.body.mem.data.data + c->body_pos,
-                                     total - c->body_pos);
+            ssize_t n =
+                platform_send(c->fd, c->plan.body.mem.data.data + c->body_pos, total - c->body_pos);
             if (n > 0) {
                 c->body_pos += (size_t)n;
                 c->response_bytes += (uint64_t)n;
@@ -834,8 +835,7 @@ static conn_status_t flush_response(conn_t *c, int64_t now_ms)
 }
 
 /* 역할: 연결 객체/버퍼를 생성하고 blocking 설정을 적용한다. 성공 뒤 fd 소유권은 conn으로 간다. */
-conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *env,
-                 int64_t now_ms)
+conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *env, int64_t now_ms)
 {
     conn_t *c;
     size_t max_input;
@@ -870,7 +870,8 @@ conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *
         free(c);
         return NULL;
     }
-    pipe_max = env->cfg->cgi_max_head > SIZE_MAX - 65536 ? SIZE_MAX : env->cfg->cgi_max_head + 65536;
+    pipe_max =
+        env->cfg->cgi_max_head > SIZE_MAX - 65536 ? SIZE_MAX : env->cfg->cgi_max_head + 65536;
     if (pipe_max == 0) {
         pipe_max = 65536;
     }

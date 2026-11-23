@@ -117,8 +117,8 @@ int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
         return -1;
     }
     /* HEAD와 본문 금지 상태는 Content-Length/Transfer-Encoding보다 먼저 NONE으로 결정한다. */
-    if (is_response && (req_method == HTTP_HEAD || (status >= 100 && status < 200) || status == 204 ||
-                        status == 304)) {
+    if (is_response && (req_method == HTTP_HEAD || (status >= 100 && status < 200) ||
+                        status == 204 || status == 304)) {
         out_f->kind = FRAMING_NONE;
         out_f->length = 0;
         return 0;
@@ -147,7 +147,8 @@ int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
                     *out_status = is_response ? 502 : 400;
                     return -1;
                 }
-                /* 세미콜론 뒤 매개변수와 코딩 이름을 분리한다. 마지막 코딩 자체가 chunked여야 한다. */
+                /* 세미콜론 뒤 매개변수와 코딩 이름을 분리한다. 마지막 코딩 자체가 chunked여야 한다.
+                 */
                 semi = 0;
                 while (semi < coding.len && coding.ptr[semi] != ';') {
                     semi++;
@@ -294,7 +295,11 @@ http_body_result_t http_body_track(http_body_tracker_t *t, const char *p, size_t
         return BODY_ERROR;
     }
 
-#define BODY_ERROR_AT_CURSOR() do { *out_used = i; return BODY_ERROR; } while (0)
+#define BODY_ERROR_AT_CURSOR()                                                                     \
+    do {                                                                                           \
+        *out_used = i;                                                                             \
+        return BODY_ERROR;                                                                         \
+    } while (0)
     /* state는 분할 입력 사이에 유지된다:
      * 0=크기 시작, 101~116=16진 숫자 수, 1=확장, 2=크기 CR,
      * 3=데이터, 4/9=데이터 뒤 줄끝, 5=트레일러 시작, 6=이름,
@@ -310,7 +315,7 @@ http_body_result_t http_body_track(http_body_tracker_t *t, const char *p, size_t
                 BODY_ERROR_AT_CURSOR();
             }
             t->remaining = (uint64_t)digit;
-            t->state = 101; /* 100 + 1자리 */
+            t->state = 101;                        /* 100 + 1자리 */
         } else if (phase >= 101 && phase <= 116) { /* 크기 숫자를 누적하거나 줄끝으로 이동한다. */
             int digit = hex_value(c);
             unsigned count = (unsigned)(phase - 100);

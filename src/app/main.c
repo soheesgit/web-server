@@ -40,7 +40,8 @@ static const char *error_text(int code, char *buf, size_t cap)
 #if defined(__GLIBC__) && defined(_GNU_SOURCE)
     return strerror_r(code, buf, cap);
 #else
-    if (strerror_r(code, buf, cap) != 0) (void)snprintf(buf, cap, "error %d", code);
+    if (strerror_r(code, buf, cap) != 0)
+        (void)snprintf(buf, cap, "error %d", code);
     return buf;
 #endif
 }
@@ -79,12 +80,14 @@ int main(int argc, char **argv)
     }
     app = app_new(&cfg, err, sizeof(err));
     if (app == NULL) {
-        fprintf(stderr, "httpd: %s\n", err[0] == '\0' ? error_text(errno, sysmsg, sizeof(sysmsg)) : err);
+        fprintf(stderr, "httpd: %s\n",
+                err[0] == '\0' ? error_text(errno, sysmsg, sizeof(sysmsg)) : err);
         log_close();
         return 2;
     }
     rc = app_run(app, &stop_requested);
-    if (rc != 0) fprintf(stderr, "httpd: app_run: %s\n", error_text(errno, sysmsg, sizeof(sysmsg)));
+    if (rc != 0)
+        fprintf(stderr, "httpd: app_run: %s\n", error_text(errno, sysmsg, sizeof(sysmsg)));
     app_free(app);
     log_close();
     return rc == 0 ? 0 : 2;

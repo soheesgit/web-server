@@ -10,13 +10,15 @@ backend_t *upstream_pick(upstream_group_t *g, const backend_t *exclude, int64_t 
 {
     size_t i;
     backend_t *selected = NULL;
-    if (g == NULL || g->n_backends == 0) return NULL;
+    if (g == NULL || g->n_backends == 0)
+        return NULL;
     pthread_mutex_lock(&g->lock);
     for (i = 0; i < g->n_backends; i++) {
         size_t idx = (g->next_index + i) % g->n_backends;
         backend_t *b = g->backends[idx];
         int available;
-        if (b == exclude) continue;
+        if (b == exclude)
+            continue;
         pthread_mutex_lock(&b->lock);
         available = b->down_until_ms <= now_ms;
         pthread_mutex_unlock(&b->lock);
