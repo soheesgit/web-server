@@ -28,16 +28,33 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
         return HANDLER_DONE;
     }
     memset(out_job, 0, sizeof(*out_job));
-    backend = upstream_pick(rt->upstream, NULL, ctx->now_ms);
-    if (backend == NULL) {
-        (void)plan_error(out_plan, 503);
-        return HANDLER_DONE;
+    if (rt->kind == ROUTE_FORWARD) {
+        /* 포워드 프록시는 목적지가 URI에 적힌 absolute-form 요청만 받는다 (D-041). */
+        static const char scheme[] = "http://";
+        if (req->target.len < sizeof(scheme) - 1 ||
+            !str_eq_ci((str_t){req->target.ptr, sizeof(scheme) - 1}, scheme)) {
+            (void)plan_error(out_plan, 400);
+            return HANDLER_DONE;
+        }
+        backend = upstream_forward_backend(rt->upstream, req->host);
+        if (backend == NULL) {
+            (void)plan_error(out_plan, 502);
+            return HANDLER_DONE;
+        }
+    } else {
+        backend = upstream_pick(rt->upstream, NULL, ctx->now_ms);
+        if (backend == NULL) {
+            (void)plan_error(out_plan, 503);
+            return HANDLER_DONE;
+        }
     }
     out_job->group = rt->upstream;
     out_job->backend = backend;
     out_job->method = req->method;
     out_job->attempts = 1;
-    out_job->max_attempts = (int)upstream_backend_count(rt->upstream);
+    /* 포워드는 목적지가 하나라 다른 백엔드로 재시도하지 않는다. */
+    out_job->max_attempts =
+        rt->kind == ROUTE_FORWARD ? 1 : (int)upstream_backend_count(rt->upstream);
     out_job->client_minor = req->minor;
     out_job->client_keep_alive = req->keep_alive;
     if (ctx->lim->max_head > SIZE_MAX - 65536u ||

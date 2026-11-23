@@ -206,7 +206,7 @@ static int parse_route(config_t *cfg, char **v, size_t n, size_t start, const ch
     route_conf_t r;
     size_t i;
     memset(&r, 0, sizeof(r));
-    if (start + 3 > n || v[start][0] != '/' || strlen(v[start]) >= sizeof(r.prefix)) {
+    if (start + 2 > n || v[start][0] != '/' || strlen(v[start]) >= sizeof(r.prefix)) {
         errno = EINVAL;
         return -1;
     }
@@ -223,6 +223,14 @@ static int parse_route(config_t *cfg, char **v, size_t n, size_t start, const ch
         if (copy_value(r.root, sizeof(r.root), v[start + 2]) != 0) {
             return -1;
         }
+    } else if (strcmp(v[start + 1], "forward") == 0) {
+        if (start + 2 != n) {
+            errno = EINVAL;
+            return -1;
+        }
+        r.kind = ROUTE_FORWARD;
+        r.keep_host = true; /* 목적지 서버에는 URI에 적힌 authority를 Host로 보낸다 */
+        (void)snprintf(r.upstream, sizeof(r.upstream), "%s", CFG_FORWARD_UPSTREAM);
     } else if (strcmp(v[start + 1], "proxy") == 0) {
         if (start + 3 > n || start + 5 < n) {
             errno = EINVAL;
@@ -303,9 +311,9 @@ static int parse_line(config_t *cfg, char **v, size_t n)
         cfg->n_upstreams++;
         return 0;
     }
-    if (strcmp(v[0], "route") == 0 && n >= 4)
+    if (strcmp(v[0], "route") == 0 && n >= 3)
         return parse_route(cfg, v, n, 1, NULL);
-    if (strcmp(v[0], "host") == 0 && n >= 5 && strcmp(v[2], "route") == 0)
+    if (strcmp(v[0], "host") == 0 && n >= 4 && strcmp(v[2], "route") == 0)
         return parse_route(cfg, v, n, 3, v[1]);
     if ((strcmp(v[0], "access_log") == 0 || strcmp(v[0], "error_log") == 0) && n == 2)
         return copy_value(strcmp(v[0], "access_log") == 0 ? cfg->access_log : cfg->error_log,
@@ -392,7 +400,7 @@ static int validate_config(config_t *cfg, char *err, size_t errcap)
                 errno = ENOTDIR;
                 return -1;
             }
-        } else {
+        } else if (r->kind == ROUTE_PROXY) {
             for (j = 0; j < cfg->n_upstreams; j++) {
                 if (strcmp(r->upstream, cfg->upstreams[j].name) == 0)
                     break;

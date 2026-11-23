@@ -36,9 +36,14 @@ struct upstream_group {
     size_t next_index;
     pthread_mutex_t lock;
     bool lock_initialized;
+    /* 포워드 그룹에서 요청 때 만드는 백엔드의 설정값 (upstream_forward_backend) */
+    size_t fw_idle_limit;
+    int fw_fail_threshold;
+    int fw_cooldown_ms;
 };
 
 struct upstream_registry {
+    upstream_group_t forward; /* FORWARD route의 목적지들 (D-041) */
     upstream_group_t *groups;
     size_t n_groups;
     int connect_timeout_ms;

@@ -307,3 +307,11 @@
 - 결정: (1) 엔진은 accept한 fd를 EV_READ로 처음 등록하고, 그 뒤 감시 이벤트는 app 콜백이 conn 상태(`CONN_WANT_READ`/`WRITE`/`WAIT_FD`)를 보고 `engine_watch`로 바꾼다. (2) CGI·프록시를 기다리는 동안 클라이언트는 읽기를 감시해 끊김(EOF)을 알아채고, 다음 요청 바이트가 미리 오면 그 응답이 끝날 때까지 읽기 감시를 멈춘다(레벨 트리거 반복 방지). (3) relay가 실패 후 새 연결을 열면 같은 fd 번호가 재사용될 수 있어, `relay_step`마다 등록을 풀고 다시 건다. 닫힌 fd의 `poller_del`은 기록만 지운다. (4) 업스트림 본문은 업스트림 rbuf에서 바로 보내고(복사 없음), 클라이언트가 막히면 출처 읽기를 멈춘다. (5) 엔진 내부 상태는 `src/engine/internal_loop.h`에 둔다(README가 정한 이름).
 - 대안: CGI·프록시를 v2에서도 블로킹 도우미 스레드로 넘김 (단일 루프 스레드 원칙과 어긋남), 엔진이 연결의 읽기·쓰기 요구를 직접 추측함 (콜백 반환값에 정보가 없음).
 - 영향: `src/engine/engine_loop.c`, `src/engine/engine_pool.c`, `src/engine/internal_loop.h`, `src/engine/poller_epoll.c`, `src/engine/poller_kqueue.c`, `src/app/app.c`, `src/downstream/conn.c`. U-EN-02(두 엔진), E-* 68개(`HTTPD_ENGINE=loop`).
+
+## D-041 포워드 프록시는 `route … forward`로 켠다
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: 과제 README는 Forward·Reverse 중 하나 이상을 요구한다. 리버스 프록시는 구현돼 있고, 포워드 프록시는 기획서 범위 밖이라 테스트 ID도 없다. 목적지가 요청마다 달라서 설정 시점에 백엔드를 만들 수 없다.
+- 결정: 설정 `route <prefix> forward`로 켠다(기본 꺼짐, 열린 프록시는 내부망 접근 위험이 있다). absolute-form 요청(`GET http://host[:port]/…`)만 받고 origin-form이면 400. 목적지 백엔드는 `upstream_forward_backend`가 처음 볼 때 이름을 해석해 만들고(최대 256개), 같은 목적지는 keep-alive 풀을 함께 쓴다. 목적지가 하나라 다른 백엔드로 재시도하지 않는다(실패 502, 응답 지연 504). 전송·relay·v1·v2 경로는 리버스 프록시와 같다. 공개 헤더 변경: `core/config.h`에 `ROUTE_FORWARD`·`CFG_FORWARD_UPSTREAM`, `upstream/upstream.h`에 `upstream_forward_backend`.
+- 대안: 별도 포워드 전용 연결 경로 (relay·풀·v2 처리를 다시 만들어야 함), 기본으로 켬 (열린 프록시).
+- 영향: `src/core/config.{h,c}`, `src/router/router.c`, `src/handler/{plan,proxy}.c`, `src/upstream/{upstream.h,backend.c,internal_state.h}`. 이름 해석은 블로킹이라 v2에서는 처음 보는 목적지마다 루프가 잠깐 멈춘다. IPv6 리터럴 미지원. 테스트 E-FW-01은 기획서 밖 ID다.

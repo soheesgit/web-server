@@ -48,7 +48,7 @@ router_t *router_new(const config_t *cfg, router_upstream_lookup_fn lookup, void
         dst->root = src->root[0] == '\0' ? NULL : src->root;
         dst->strip_prefix = src->strip_prefix;
         dst->keep_host = src->keep_host;
-        if (src->kind == ROUTE_PROXY) {
+        if (src->kind == ROUTE_PROXY || src->kind == ROUTE_FORWARD) {
             dst->upstream = lookup == NULL ? NULL : lookup(lookup_ctx, src->upstream);
             if (dst->upstream == NULL) {
                 if (err != NULL && errcap > 0) {
