@@ -5,6 +5,7 @@
 #include "unit/testlib.h"
 
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,11 @@
 static test_entry_t g_tests[TEST_MAX];
 static size_t g_ntests;
 static int g_failed;
+
+/* test_tmpdir가 돌려주는 경로. 테스트는 fork된 자식에서 돌므로 테스트마다 새로 시작한다 */
+#define TEST_MAX_TMPDIRS 8
+static char g_tmpdirs[TEST_MAX_TMPDIRS][PATH_MAX];
+static size_t g_ntmp;
 
 void test_register(const char *id, const char *name, test_fn fn)
 {
@@ -58,10 +64,14 @@ const char *test_tmpdir(void)
     if (snprintf(tmpl, sizeof(tmpl), "%s/httpd-test.XXXXXX", base) >= (int)sizeof(tmpl)) {
         return NULL;
     }
-    if (mkdtemp(tmpl) == NULL) {
+    if (g_ntmp >= TEST_MAX_TMPDIRS || mkdtemp(tmpl) == NULL) {
         return NULL;
     }
-    dir = realpath(tmpl, NULL);
+    /* malloc하지 않는다: 해제하지 않는 할당은 ASan(LeakSanitizer)이 누수로 보고한다 */
+    dir = realpath(tmpl, g_tmpdirs[g_ntmp]);
+    if (dir != NULL) {
+        g_ntmp++;
+    }
     return dir;
 }
 
