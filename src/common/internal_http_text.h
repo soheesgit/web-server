@@ -25,7 +25,10 @@ static inline bool http_token_byte_valid(unsigned char c)
            (c != 0 && strchr("!#$%&'*+-.^_`|~", c) != NULL);
 }
 
-/** 쉼표 목록의 첫 항목을 꺼낸다. NULL은 목록 끝이며 길이 0인 항목과 구분된다. */
+/**
+ * 쉼표 목록에서 첫 항목을 꺼내고 원본을 가리키는 다음 구간으로 전진한다.
+ * list의 NULL은 목록 끝이다. 끝에 쉼표가 있으면 길이 0인 항목을 한 번 더 남긴다.
+ */
 static inline str_t http_pop_list_item(str_t *list)
 {
     const char *comma = memchr(list->ptr, ',', list->len);

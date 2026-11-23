@@ -8,6 +8,7 @@
 
 static int append_date(buf_t *out, time_t now)
 {
+    /* 로캘에 따라 요일과 월 이름이 달라지지 않도록 HTTP 표기의 영문 약자를 쓴다. */
     static const char *const weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
     static const char *const months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
@@ -37,6 +38,7 @@ static int append_framing(const http_head_out_t *head, int minor, buf_t *out)
 
 static int append_connection(const http_head_out_t *head, int minor, buf_t *out)
 {
+    /* HTTP/1.0에는 chunked 헤더를 보낼 수 없어 이런 응답은 연결 종료로 경계를 알린다. */
     if (head->close || head->framing.kind == FRAMING_CLOSE ||
         (minor == 0 && head->framing.kind == FRAMING_CHUNKED)) {
         return buf_append(out, "Connection: close\r\n", sizeof("Connection: close\r\n") - 1);
@@ -55,6 +57,7 @@ int response_write_head(const http_head_out_t *head, int client_minor, time_t no
         return -1;
     }
 
+    /* 기존 버퍼 뒤에 응답 머리를 붙인다. 한 줄이라도 실패하면 이번 머리를 모두 취소한다. */
     size_t start = out->len;
     if (buf_appendf(out, "HTTP/1.1 %03d %s\r\n", head->status, http_reason(head->status)) < 0 ||
         append_date(out, now) < 0 ||
@@ -70,6 +73,7 @@ int response_write_head(const http_head_out_t *head, int client_minor, time_t no
 
 int response_write_chunk(const void *p, size_t n, buf_t *out)
 {
+    /* 길이 0인 데이터는 건너뛴다. 전송 종료 표시는 호출자가 따로 붙인다. */
     if (n == 0) {
         return 0;
     }

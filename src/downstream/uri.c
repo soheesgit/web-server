@@ -11,6 +11,7 @@ int uri_split(str_t target, str_t *out_path, str_t *out_query)
         return -1;
     }
 
+    /* 첫 '?'에서 경로가 끝나고, 첫 '#'에서 사용할 대상의 범위가 끝난다. */
     size_t path_end = target.len;
     size_t query_start = target.len;
     size_t end = target.len;
@@ -56,6 +57,7 @@ int uri_parse_absolute(str_t target, str_t *out_authority, str_t *out_rest)
         errno = EINVAL;
         return -1;
     }
+    /* 호스트 뒤에 경로를 생략한 절대 URI는 루트 경로로 처리한다. */
     *out_authority = (str_t){target.ptr + SCHEME_LEN, path - SCHEME_LEN};
     *out_rest = path < target.len ? (str_t){target.ptr + path, target.len - path} : STR_LIT("/");
     return 0;
@@ -93,6 +95,7 @@ int uri_decode_path(str_t in, char *out, size_t cap, size_t *out_len)
             c = (unsigned char)(high << 4 | low);
             cursor += 2;
         }
+        /* 디코딩 결과는 파일 경로 문자열로도 쓰므로 중간 NUL을 허용하지 않는다. */
         if (c == 0) {
             errno = EINVAL;
             return -1;
@@ -121,6 +124,7 @@ int path_normalize(char *path)
         return -1;
     }
 
+    /* cursor는 원본을 읽고, used는 같은 버퍼 앞에 쌓인 정규화 결과의 길이를 나타낸다. */
     const size_t len = strlen(path);
     size_t used = 1;
     bool trailing_slash = false;
@@ -135,6 +139,7 @@ int path_normalize(char *path)
         trailing_slash = cursor < len || dot || parent;
 
         if (parent) {
+            /* '..'는 마지막으로 쓴 경로 조각을 지운다. 루트에선 더 지울 조각이 없다. */
             if (used == 1) {
                 errno = EPERM;
                 return -1;
@@ -157,6 +162,7 @@ int path_normalize(char *path)
             ++cursor;
         }
     }
+    /* 끝의 '/', '/.', '/..'가 가리키던 디렉터리 경로 표기는 유지한다. */
     if (trailing_slash && used > 1) {
         path[used++] = '/';
     }

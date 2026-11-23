@@ -19,7 +19,7 @@
 void plan_init(response_plan_t *p)
 {
     memset(p, 0, sizeof(*p));
-    /* FILE과 PIPE는 첫 fd 위치를 공유한다. 다른 종류는 전환 시 초기화한다. */
+    /* FILE과 PIPE는 첫 fd 위치를 공유한다. body의 유효한 멤버는 kind로 구분한다. */
     p->body.pipe.out_fd = -1;
     p->body.pipe.in_fd = -1;
     p->body.pipe.deadline_ms = -1;
@@ -28,6 +28,7 @@ void plan_init(response_plan_t *p)
 int plan_set_mem(response_plan_t *p, int status, const char *content_type, const void *body,
                  size_t n)
 {
+    /* body가 기존 계획을 가리킬 수도 있으므로 복사를 끝낸 뒤 이전 자원을 정리한다. */
     response_plan_t next;
 
     plan_init(&next);
@@ -52,6 +53,7 @@ int plan_set_mem(response_plan_t *p, int status, const char *content_type, const
 
 int plan_error(response_plan_t *p, int status)
 {
+    /* 오류 응답으로 교체하더라도 호출자가 미리 정한 연결 종료 정책을 유지한다. */
     bool close_after = p->head.close;
 
     plan_cleanup(p);
@@ -77,6 +79,7 @@ int plan_error(response_plan_t *p, int status)
 
 static bool plan_header_valid(str_t name, const char *value)
 {
+    /* 응답 직렬화가 생성하는 헤더와 이름이 겹치지 않게 한다. */
     static const char *const reserved[] = {
         "Date", "Server", "Content-Length", "Connection", "Transfer-Encoding",
     };
@@ -109,6 +112,7 @@ int plan_add_header(response_plan_t *p, const char *name, const char *value)
         return buf_appendf(&p->head.fields, "%s: %s\r\n", name, value);
     }
 
+    /* 새 버퍼는 첫 헤더를 추가하는 데 성공한 뒤에만 계획으로 넘긴다. */
     if (buf_init(&fields, 256, 64 * 1024) != 0 ||
         buf_appendf(&fields, "%s: %s\r\n", name, value) != 0) {
         buf_cleanup(&fields);
@@ -120,6 +124,7 @@ int plan_add_header(response_plan_t *p, const char *name, const char *value)
 
 static void reap_child(pid_t pid)
 {
+    /* 종료한 자식은 바로 회수하고, 아직 살아 있을 때만 종료 시그널을 보낸다. */
     pid_t result;
 
     do {
@@ -164,6 +169,7 @@ void plan_cleanup(response_plan_t *p)
         buf_cleanup(&p->body.pipe.in_data);
         break;
     case BODY_UPSTREAM:
+        /* 완료한 중계는 호출자가 먼저 반납한다. 계획에 남은 연결은 재사용하지 않는다. */
         if (p->body.upstream.conn != NULL) {
             upstream_release(p->body.upstream.conn, false);
         }

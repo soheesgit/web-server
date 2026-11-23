@@ -30,10 +30,12 @@ struct conn {
     const conn_env_t *env;
     char ip[INET6_ADDRSTRLEN];
     uint16_t port;
+    /* 헤더·본문 수신, 송신, 외부 응답 대기 중 현재 적용되는 단조 시계 마감이다. */
     int64_t deadline;
     bool finished;
     bool watch_peer_input;
     bool upstream_reusable;
+    /* 한 요청을 처리하는 동안 input의 헤더·본문 구간을 요청 객체가 빌린다. */
     buf_t input;
     buf_t output;
     response_plan_t plan;
@@ -58,6 +60,7 @@ static int64_t earlier(int64_t a, int64_t b)
 
 static int poll_until(struct pollfd *fds, nfds_t n, int64_t deadline)
 {
+    /* 매번 절대 마감까지 남은 시간만 기다린다. 재시도해도 마감은 늘어나지 않는다. */
     for (;;) {
         int timeout = -1;
         if (deadline >= 0) {
@@ -132,6 +135,7 @@ conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *
     c->env = env;
     c->deadline = after_ms(now_ms, env->cfg->header_timeout_ms);
     plan_init(&c->plan);
+    /* 한도에 딱 맞는 머리와 한 바이트 초과한 머리를 구분할 여유를 둔다. */
     if (buf_init(&c->input, 0, lim->max_head + (size_t)lim->max_body + 1) < 0 ||
         buf_init(&c->output, 0, CONN_WRITE_CAP) < 0) {
         goto failed;
@@ -142,6 +146,7 @@ conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *
         goto failed;
     }
     if (!env->nonblocking) {
+        /* poll 이후 실제 blocking 읽기나 쓰기도 짧은 주기 안에 돌아오도록 한다. */
         const struct timeval period = {.tv_usec = 100000};
         if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &period, sizeof(period)) < 0 ||
             setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &period, sizeof(period)) < 0) {
@@ -199,6 +204,7 @@ static int read_request(conn_t *c, int64_t head_deadline, http_request_t *req)
     http_parse_result_t parsed;
 
     do {
+        /* keep-alive로 남아 있는 파이프라인 요청은 읽기 전에 먼저 파싱한다. */
         parsed = request_parse_head(c->input.data, c->input.len, lim, req, &status);
         if (parsed == HTTP_PARSE_ERROR) {
             return status;
@@ -211,6 +217,7 @@ static int read_request(conn_t *c, int64_t head_deadline, http_request_t *req)
             if (n == 0) {
                 return c->input.len != 0 ? 400 : -1;
             }
+            /* 첫 바이트를 받은 뒤에는 유휴 마감 대신 미리 계산한 헤더 마감을 쓴다. */
             c->deadline = head_deadline;
         }
     } while (parsed == HTTP_PARSE_INCOMPLETE);
@@ -236,7 +243,7 @@ static int read_request(conn_t *c, int64_t head_deadline, http_request_t *req)
                 return 400;
             }
         } while (c->input.len < total);
-        /* 버퍼 재할당 뒤 빌리는 뷰를 다시 만든다. */
+        /* 본문 추가로 버퍼 주소가 바뀌었을 수 있어 헤더와 원본 URI 뷰를 다시 만든다. */
         if (request_parse_head(c->input.data, c->input.len, lim, req, &status) != HTTP_PARSE_DONE) {
             return 400;
         }
@@ -254,6 +261,7 @@ static int send_bytes(conn_t *c, const void *data, size_t len, int64_t hard_dead
     if (len != 0 && now < 0) {
         return -1;
     }
+    /* 송신에 진전이 있으면 정체 마감을 갱신하되 CGI 자체 마감은 넘기지 않는다. */
     c->deadline = earlier(after_ms(now, stall), hard_deadline);
 
     while (len != 0) {
@@ -300,6 +308,7 @@ static int send_file(conn_t *c, uint64_t *sent)
         off_t before = position;
         size_t count = left < CONN_IO_CHUNK ? (size_t)left : CONN_IO_CHUNK;
         ssize_t result = platform_sendfile(c->fd, c->plan.body.file.fd, &position, count);
+        /* sendfile은 실패를 반환할 때도 이미 보낸 바이트만큼 오프셋을 옮길 수 있다. */
         off_t progress = position - before;
         if (progress > 0) {
             left -= progress;
@@ -327,6 +336,7 @@ static bool peer_gone(conn_t *c, short events)
         char byte;
         ssize_t n = recv(c->fd, &byte, sizeof(byte), MSG_PEEK);
         if (n > 0) {
+            /* 다음 요청을 그대로 두고, 그 바이트가 poll을 반복해서 깨우지 않게 한다. */
             c->watch_peer_input = false;
         }
         return n == 0 || (n < 0 && !would_wait());
@@ -341,6 +351,7 @@ static struct pollfd watch_client(const conn_t *c)
 
 static void finish_cgi_input(response_plan_t *plan)
 {
+    /* stdin에 EOF를 알린다. fd를 지워 plan_cleanup에서 다시 닫지 않게 한다. */
     if (plan->body.pipe.in_fd >= 0) {
         (void)close(plan->body.pipe.in_fd);
         plan->body.pipe.in_fd = -1;
@@ -370,6 +381,7 @@ static ssize_t read_cgi_output(conn_t *c, void *out, size_t size)
     response_plan_t *plan = &c->plan;
     c->deadline = plan->body.pipe.deadline_ms;
 
+    /* 자식이 stdin을 다 읽기 전에 stdout이 가득 찰 수 있어 두 파이프를 함께 확인한다. */
     for (;;) {
         struct pollfd fds[] = {watch_client(c),
                                {.fd = plan->body.pipe.out_fd, .events = POLLIN},
@@ -407,6 +419,7 @@ static int check_cgi_exit(response_plan_t *plan)
     if (child == 0) {
         return 1;
     }
+    /* 이미 회수된 자식은 계획 정리에서 다시 종료하거나 기다리지 않는다. */
     if (child > 0 || errno == ECHILD) {
         plan->body.pipe.pid = 0;
     }
@@ -462,6 +475,7 @@ static int prepare_cgi(conn_t *c, int minor, buf_t *buffered)
             buf_cleanup(&plan->head.fields);
             plan->head = head;
             plan->head_pending = false;
+            /* 한 번의 읽기에 딸려 온 본문은 남겨 두고 CGI 헤더만 걷어낸다. */
             buf_consume(buffered, used);
             return 0;
         }
@@ -527,6 +541,7 @@ static int send_cgi(conn_t *c, const buf_t *buffered, uint64_t *sent)
         size = (size_t)n;
     }
 
+    /* 자식의 정상 종료를 확인한다. 길이가 선언된 경우 실제 전송량도 확인한다. */
     if (finish_cgi_output(c) < 0 || (framing.kind == FRAMING_LENGTH && framing.length != *sent)) {
         return -1;
     }
@@ -557,6 +572,7 @@ static int prepare_proxy(conn_t *c, int minor)
             return 0;
         }
 
+        /* D-035의 변환 지원 전까지 복합 코딩과 HTTP/1.0에서의 청크 중계는 502로 처리한다. */
         if (response.framing.kind == FRAMING_CHUNKED) {
             const http_header_t *coding = http_header_get(&response.headers, "Transfer-Encoding");
             if (minor == 0 || coding == NULL || !str_eq_ci(coding->value, "chunked") ||
@@ -569,6 +585,7 @@ static int prepare_proxy(conn_t *c, int minor)
         if (proxy_on_head(&c->job, upstream, &response, &c->plan) < 0) {
             return 502;
         }
+        /* proxy_on_head가 헤더를 사용한 뒤 rbuf에서 본문 시작점까지 소비한다. */
         c->upstream_reusable = response.keep_alive;
         buf_consume(&upstream->rbuf, response.head_len);
         return 0;
@@ -611,6 +628,7 @@ static int send_upstream(conn_t *c, uint64_t *sent)
         if (tracked == BODY_ERROR || send_bytes(c, buffer->data, used, -1, sent) < 0) {
             return -1;
         }
+        /* 응답 경계 뒤에 설명할 수 없는 바이트가 남으면 풀에 재사용 가능한 상태로 넘기지 않는다. */
         if (tracked == BODY_DONE) {
             upstream_release(upstream, c->upstream_reusable && used == buffer->len);
             c->plan.body.upstream.conn = NULL;
@@ -618,6 +636,7 @@ static int send_upstream(conn_t *c, uint64_t *sent)
         }
         buf_consume(buffer, used);
         ssize_t n = read_upstream(c, upstream);
+        /* EOF는 연결 종료 방식에서만 정상적인 본문 끝이다. */
         if (n <= 0) {
             return n == 0 && tracker->f.kind == FRAMING_CLOSE ? 0 : -1;
         }
@@ -687,6 +706,7 @@ static int send_response(conn_t *c, const http_request_t *req, const buf_t *cgi,
         return -1;
     }
 
+    /* HEAD는 응답 머리의 길이 정보만 보낸다. 본문 없는 업스트림 연결은 여기서 반납한다. */
     if (!body_allowed(req->method, c->plan.head.status)) {
         if (c->plan.kind == BODY_UPSTREAM && c->plan.body.upstream.tracker.f.kind == FRAMING_NONE) {
             return send_upstream(c, sent);
@@ -734,6 +754,7 @@ static void record_access(const conn_t *c, const http_request_t *req, uint64_t s
 
 static void drain_after_error(conn_t *c)
 {
+    /* 오류 응답을 먼저 끝내고 남은 입력을 잠깐 읽어 TCP 리셋으로 응답이 유실되는 일을 줄인다. */
     int64_t now = platform_now_ms();
     if (now < 0 || shutdown(c->fd, SHUT_WR) < 0) {
         return;
@@ -775,6 +796,7 @@ static bool serve_request(conn_t *c, int64_t head_deadline, bool last)
     bool keep = false;
     if (status >= 0 && (status == 0 || plan_error(&c->plan, status) == 0)) {
         http_head_out_t *head = &c->plan.head;
+        /* 연결을 계속 쓸지 헤더를 보내기 전에 정해야 Connection 값과 실제 동작이 맞는다. */
         head->close =
             head->close || bad_request || last || !req.keep_alive ||
             head->framing.kind == FRAMING_CLOSE ||
@@ -787,6 +809,7 @@ static bool serve_request(conn_t *c, int64_t head_deadline, bool last)
         }
         keep = sent_all && !head->close;
         if (keep) {
+            /* 이번 요청의 머리와 본문만 소비한다. 뒤에 붙은 다음 요청은 남겨 둔다. */
             buf_consume(&c->input, req.head_len + req.body.len);
         }
     }
