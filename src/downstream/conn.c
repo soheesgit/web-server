@@ -34,13 +34,14 @@
 
 /*
  * 이 파일의 역할: 요청 수신부터 계획 실행, 응답 송신, keep-alive 판정까지 연결 하나를 조정한다.
- * 구현 상태: v1 blocking 경로는 CGI pipe와 upstream relay 본문까지 연결한다. v2 이벤트 경로는
- * 메모리/파일 응답을 처리하지만 CGI와 proxy의 비동기 fd 상태 머신은 미완성이다. 그 요청은 500을
- * 보낸다. 의존 상태: 이 파일은 core/router/handler/upstream/engine 공개 API를 호출한다. 현재
- * 저장소의 해당 디렉터리에는 스텁이 남아 있어, 그 부분까지 구현해야 서버 실행이 이어진다.
+ * v1(blocking)은 CGI pipe와 upstream relay를 기다리며 처리한다. v2(non-blocking)는 같은 일을
+ * 단계(v2_stage_t)로 나눠, pipe·업스트림 fd를 engine_watch로 등록하고 이벤트마다 이어 간다.
  */
 /* 현재 연결 단계: 요청 받기, 응답 보내기, 닫힘. */
 typedef enum { CONN_READING, CONN_WRITING, CONN_FINISHED } conn_phase_t;
+
+/* v2 비동기 단계: CGI 머리·본문, 백엔드 교환(relay)·본문. V2_NONE이면 클라이언트 fd만 쓴다. */
+typedef enum { V2_NONE, V2_CGI_HEAD, V2_CGI_BODY, V2_PROXY_HEAD, V2_PROXY_BODY } v2_stage_t;
 
 /*
  * 연결 하나가 소유하는 버퍼·응답 계획과 요청 처리 상태.
@@ -76,7 +77,62 @@ struct conn {
     bool header_deadline_set; /* 헤더 마감을 한 번만 계산했는지 */
     http_response_t
         upstream_resp; /* relay 응답 머리 사본. 현재는 보관 후 별도 처리에 쓰지 않는다. */
+    v2_stage_t stage; /* v2 비동기 단계 */
+    relay_t *relay;   /* V2_PROXY_HEAD에서 진행 중인 백엔드 교환 */
+    int xfd[2];       /* 이 연결이 engine_watch로 등록한 pipe·업스트림 fd. 없음 -1 */
+    uint64_t body_left; /* V2_CGI_BODY: Content-Length 응답의 남은 바이트 */
+    size_t up_pending; /* V2_PROXY_BODY: 업스트림 rbuf 앞쪽의 아직 못 보낸 본문 바이트 */
+    bool up_reuse; /* V2_PROXY_BODY: 본문이 정상으로 끝나 연결을 풀에 돌려줄 수 있는지 */
+    bool body_done; /* v2 본문 출처가 끝났는지 (남은 바이트는 아직 보낼 수 있음) */
+    bool client_quiet; /* 다음 요청 바이트가 와서 클라이언트 읽기 감시를 멈췄는지 */
 };
+
+/* 역할: v2 추가 fd 등록을 푼다. fd를 닫기 전에 부른다. */
+static void xunwatch(conn_t *c, int fd)
+{
+    for (int i = 0; i < 2; i++) {
+        if (fd >= 0 && c->xfd[i] == fd) {
+            (void)engine_unwatch(c->env.engine, fd);
+            c->xfd[i] = -1;
+        }
+    }
+}
+
+/* 역할: v2 추가 fd를 등록하거나 감시 이벤트를 바꾼다 (events 0이면 잠시 멈춤). */
+static int xwatch(conn_t *c, int fd, unsigned events)
+{
+    int slot = c->xfd[0] == fd   ? 0
+               : c->xfd[1] == fd ? 1
+               : c->xfd[0] < 0   ? 0
+               : c->xfd[1] < 0   ? 1
+                                 : -1;
+    if (slot < 0) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if (engine_watch(c->env.engine, fd, events, c) != 0) {
+        return -1;
+    }
+    c->xfd[slot] = fd;
+    return 0;
+}
+
+/* 역할: v2 단계를 끝낸다. 추가 fd 감시를 풀고 진행 중인 relay를 정리한다 (계획 정리 전에 부른다).
+ */
+static void v2_reset(conn_t *c)
+{
+    xunwatch(c, c->xfd[0]);
+    xunwatch(c, c->xfd[1]);
+    if (c->relay != NULL) {
+        relay_free(c->relay);
+        c->relay = NULL;
+    }
+    c->stage = V2_NONE;
+    c->up_pending = 0;
+    c->up_reuse = false;
+    c->body_done = false;
+    c->client_quiet = false;
+}
 
 /* 역할: 설정된 상대 timeout을 deadline 단조 시각으로 바꾼다. 음수/넘침이면 마감 없음(-1)이다. */
 static int64_t add_timeout(int64_t now_ms, int timeout_ms)
@@ -127,6 +183,7 @@ static void save_client_ip(conn_t *c)
 static void clear_request_state(conn_t *c)
 {
     /* 요청 처리가 끝난 뒤 계획·프록시 작업을 해제하고 다음 요청용 상태로 되돌린다. */
+    v2_reset(c);
     plan_cleanup(&c->plan);
     proxy_job_cleanup(&c->job);
     memset(&c->req, 0, sizeof(c->req));
@@ -152,6 +209,7 @@ static void clear_request_state(conn_t *c)
 static int set_error_plan(conn_t *c, int status, bool parser_error)
 {
     /* 오류도 일반 응답 계획으로 바꿔 같은 직렬화·송신 경로를 사용한다. */
+    v2_reset(c);
     if (!c->plan_ready) {
         plan_init(&c->plan);
         c->plan_ready = true;
@@ -357,6 +415,28 @@ static int poll_cgi_fds(conn_t *c)
     return 0;
 }
 
+/* 역할: 파싱한 CGI 머리를 응답 계획으로 옮기고, 길이 정보가 없으면 버전에 맞는 framing을 고른다. */
+static void apply_cgi_head(conn_t *c, const http_head_out_t *parsed_head, size_t used)
+{
+    bool keep_close = c->plan.head.close;
+    /* CGI 상태·헤더를 클라이언트 응답 계획으로 옮기고 본문 앞부분은 남긴다. */
+    buf_consume(&c->pipe_buf, used);
+    buf_cleanup(&c->plan.head.fields);
+    c->plan.head = *parsed_head;
+    c->plan.head.close = keep_close;
+    c->plan.head_pending = false;
+    if (c->plan.head.framing.kind == FRAMING_NONE) {
+        if (c->req.minor >= 1) {
+            c->plan.head.framing.kind = FRAMING_CHUNKED;
+            c->plan.head.framing.length = 0;
+        } else {
+            c->plan.head.framing.kind = FRAMING_CLOSE;
+            c->plan.head.framing.length = 0;
+            c->plan.head.close = true;
+        }
+    }
+}
+
 /* 역할: CGI 응답 머리를 파싱할 때까지 stdin 본문 전송과 stdout 읽기를 함께 진행한다. */
 static int collect_cgi_head(conn_t *c)
 {
@@ -381,23 +461,7 @@ static int collect_cgi_head(conn_t *c)
             cgi_parse_head(c->pipe_buf.data, c->pipe_buf.len, c->env.cfg->cgi_max_head,
                            &parsed_head, &used, &status);
         if (result == HTTP_PARSE_DONE) {
-            bool keep_close = c->plan.head.close;
-            /* CGI 상태·헤더를 클라이언트 응답 계획으로 옮기고 본문 앞부분은 남긴다. */
-            buf_consume(&c->pipe_buf, used);
-            buf_cleanup(&c->plan.head.fields);
-            c->plan.head = parsed_head;
-            c->plan.head.close = keep_close;
-            c->plan.head_pending = false;
-            if (c->plan.head.framing.kind == FRAMING_NONE) {
-                if (c->req.minor >= 1) {
-                    c->plan.head.framing.kind = FRAMING_CHUNKED;
-                    c->plan.head.framing.length = 0;
-                } else {
-                    c->plan.head.framing.kind = FRAMING_CLOSE;
-                    c->plan.head.framing.length = 0;
-                    c->plan.head.close = true;
-                }
-            }
+            apply_cgi_head(c, &parsed_head, used);
             return 0;
         }
         if (result == HTTP_PARSE_ERROR || c->plan.body.pipe.out_fd < 0) {
@@ -444,7 +508,50 @@ static int proxy_exchange(conn_t *c, int64_t now_ms)
     return plan_error(&c->plan, 502);
 }
 
-/* 역할: router 결과를 handler에 넘기고 완성된 response_plan을 응답 전송 단계에 준비한다. */
+/* 역할: 완성된 응답 계획에 연결 종료 조건을 반영하고 머리를 wbuf에 써서 송신 단계로 바꾼다. */
+static int start_response(conn_t *c, int64_t now_ms)
+{
+    if (!c->req.keep_alive ||
+        (c->env.cfg->max_keepalive_requests > 0 &&
+         c->request_count + 1 >= (uint64_t)c->env.cfg->max_keepalive_requests)) {
+        c->plan.head.close = true;
+    }
+    if (c->force_close) {
+        c->plan.head.close = true;
+    }
+    c->file_off = c->plan.kind == BODY_FILE ? c->plan.body.file.off : 0;
+    buf_reset(&c->wbuf);
+    if (response_write_head(&c->plan.head, c->req.minor, time(NULL), &c->wbuf) != 0) {
+        return -1;
+    }
+    c->phase = CONN_WRITING;
+    c->deadline_ms = add_timeout(now_ms, c->env.cfg->body_timeout_ms);
+    return 0;
+}
+
+/* 역할: v2에서 CGI pipe를 non-blocking으로 바꾸고 엔진에 등록해 머리 수집 단계를 시작한다. */
+static int cgi_v2_start(conn_t *c)
+{
+    response_plan_t *p = &c->plan;
+    if (p->body.pipe.out_fd < 0 || set_fd_nonblock(p->body.pipe.out_fd) != 0 ||
+        (p->body.pipe.in_fd >= 0 && set_fd_nonblock(p->body.pipe.in_fd) != 0)) {
+        return -1;
+    }
+    if (p->body.pipe.in_data.len == 0 && p->body.pipe.in_fd >= 0) {
+        close(p->body.pipe.in_fd);
+        p->body.pipe.in_fd = -1;
+    }
+    buf_reset(&c->pipe_buf);
+    c->stage = V2_CGI_HEAD;
+    c->deadline_ms = p->body.pipe.deadline_ms;
+    if (p->body.pipe.in_fd >= 0 && xwatch(c, p->body.pipe.in_fd, EV_WRITE) != 0) {
+        return -1;
+    }
+    return xwatch(c, p->body.pipe.out_fd, EV_READ);
+}
+
+/* 역할: router 결과를 handler에 넘기고 완성된 response_plan을 응답 전송 단계에 준비한다.
+ * 0 송신 준비 끝, 1 v2 비동기 단계 시작(c->stage), -1 실패. */
 static int dispatch_request(conn_t *c, int64_t now_ms)
 {
     const route_t *route;
@@ -471,48 +578,40 @@ static int dispatch_request(conn_t *c, int64_t now_ms)
     /* 프록시 처리기만 relay 교환을 추가로 수행한다. */
     if (result == HANDLER_NEED_UPSTREAM) {
         if (c->env.nonblocking) {
-            /* v2 비동기 relay 상태 머신은 아직 연결되지 않아 이 경로는 500으로 종료한다. */
-            return set_error_plan(c, 500, false);
+            /* v2: 백엔드 교환을 relay 상태 머신으로 시작한다. 첫 단계는 호출자가 진행한다. */
+            c->relay =
+                relay_start(&c->job, c->env.lim, now_ms, c->env.cfg->upstream_connect_timeout_ms,
+                            c->env.cfg->upstream_response_timeout_ms);
+            if (c->relay != NULL) {
+                c->stage = V2_PROXY_HEAD;
+                return 1;
+            }
+            return set_error_plan(c, 502, false) != 0 ? -1 : start_response(c, now_ms);
         }
         if (proxy_exchange(c, now_ms) != 0) {
-            return set_error_plan(c, 502, false);
+            return set_error_plan(c, 502, false) != 0 ? -1 : start_response(c, now_ms);
         }
     }
     /* 처리기가 유효한 상태를 만들었는지 확인하고, 응답 뒤 닫을 조건을 머리에 반영한다. */
     if (!c->plan.head_pending && (c->plan.head.status < 100 || c->plan.head.status > 599)) {
-        return set_error_plan(c, 500, false);
-    }
-    if (c->env.nonblocking &&
-        (c->plan.head_pending || c->plan.kind == BODY_PIPE || c->plan.kind == BODY_UPSTREAM)) {
-        if (set_error_plan(c, 500, false) != 0) {
-            return -1;
-        }
+        return set_error_plan(c, 500, false) != 0 ? -1 : start_response(c, now_ms);
     }
     if (c->plan.head_pending) {
-        int cgi_status = collect_cgi_head(c);
-        if (cgi_status != 0) {
-            if (set_error_plan(c, cgi_status, false) != 0) {
+        if (c->env.nonblocking) {
+            if (cgi_v2_start(c) == 0) {
+                return 1;
+            }
+            if (set_error_plan(c, 500, false) != 0) {
+                return -1;
+            }
+        } else {
+            int cgi_status = collect_cgi_head(c);
+            if (cgi_status != 0 && set_error_plan(c, cgi_status, false) != 0) {
                 return -1;
             }
         }
     }
-    if (!c->req.keep_alive ||
-        (c->env.cfg->max_keepalive_requests > 0 &&
-         c->request_count + 1 >= (uint64_t)c->env.cfg->max_keepalive_requests)) {
-        c->plan.head.close = true;
-    }
-    if (c->force_close) {
-        c->plan.head.close = true;
-    }
-    /* 실제 응답 머리를 write 버퍼에 만들고 이후 송신 상태로 이동한다. */
-    c->file_off = c->plan.kind == BODY_FILE ? c->plan.body.file.off : 0;
-    buf_reset(&c->wbuf);
-    if (response_write_head(&c->plan.head, c->req.minor, time(NULL), &c->wbuf) != 0) {
-        return -1;
-    }
-    c->phase = CONN_WRITING;
-    c->deadline_ms = add_timeout(now_ms, c->env.cfg->body_timeout_ms);
-    return 0;
+    return start_response(c, now_ms);
 }
 
 /* 역할: CGI stdout 본문을 framing 규칙에 맞춰 클라이언트로 중계하고 자식을 회수한다. */
@@ -754,6 +853,23 @@ static int finish_request(conn_t *c, int64_t now_ms)
     return 0;
 }
 
+/* 역할: 응답 하나를 마친 뒤 연결을 닫을지, 다음 요청(파이프라인 포함)을 받을지 정한다. */
+static conn_status_t after_response(conn_t *c, int64_t now_ms)
+{
+    int done = finish_request(c, now_ms);
+    if (done != 0) {
+        return CONN_CLOSE;
+    }
+    c->request_start_ms = now_ms;
+    if (c->rbuf.len != 0) {
+        c->deadline_ms = add_timeout(now_ms, c->env.cfg->header_timeout_ms);
+        c->header_deadline_set = true;
+        return conn_on_event(c, c->fd, EV_READ, now_ms);
+    }
+    c->header_deadline_set = false;
+    return CONN_WANT_READ;
+}
+
 /* 역할: 응답 머리와 지원하는 본문을 가능한 만큼 보내고 다음 이벤트 종류를 반환한다. */
 static conn_status_t flush_response(conn_t *c, int64_t now_ms)
 {
@@ -822,18 +938,361 @@ static conn_status_t flush_response(conn_t *c, int64_t now_ms)
             return CONN_CLOSE;
         }
     }
-    int done = finish_request(c, now_ms);
-    if (done != 0) {
+    return after_response(c, now_ms);
+}
+
+/* 역할: 오류 응답 계획을 만들고 바로 보낸다. */
+static conn_status_t respond_error(conn_t *c, int status, int64_t now_ms)
+{
+    if (set_error_plan(c, status, false) != 0 || start_response(c, now_ms) != 0) {
+        c->phase = CONN_FINISHED;
         return CONN_CLOSE;
     }
-    c->request_start_ms = now_ms;
-    if (c->rbuf.len != 0) {
-        c->deadline_ms = add_timeout(now_ms, c->env.cfg->header_timeout_ms);
-        c->header_deadline_set = true;
-        return conn_on_event(c, c->fd, EV_READ, now_ms);
+    return flush_response(c, now_ms);
+}
+
+/* 역할: 처리기가 이미 만든 계획(예: proxy_on_fail의 502·504)을 그대로 보낸다. */
+static conn_status_t send_plan(conn_t *c, int64_t now_ms)
+{
+    c->stage = V2_NONE;
+    if (start_response(c, now_ms) != 0) {
+        c->phase = CONN_FINISHED;
+        return CONN_CLOSE;
     }
-    c->header_deadline_set = false;
-    return CONN_WANT_READ;
+    return flush_response(c, now_ms);
+}
+
+/* 역할: v2에서 pipe·업스트림을 기다리는 동안 클라이언트 fd에 무엇을 감시할지 정한다.
+ * 읽기를 감시해 끊김(EOF)을 알아채되, 다음 요청 바이트가 미리 왔으면 감시를 멈춘다. */
+static conn_status_t v2_wait(const conn_t *c)
+{
+    return c->client_quiet ? CONN_WAIT_FD : CONN_WANT_READ;
+}
+
+/* 역할: 출력이 끝난 CGI 자식을 기다리지 않고 회수해 본다. 남으면 plan_cleanup이 회수한다. */
+static void cgi_reap(conn_t *c)
+{
+    int status = 0;
+    pid_t pid = c->plan.body.pipe.pid;
+    if (pid > 0 && waitpid(pid, &status, WNOHANG) == pid) {
+        c->plan.body.pipe.pid = 0;
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            c->force_close = true;
+        }
+    }
+}
+
+/* 역할: CGI stdout에서 본문을 한 번 읽어 framing에 맞춰 wbuf에 붙인다.
+ * 1 붙임, 0 읽을 것 없음(EAGAIN), 2 끝, -1 오류. */
+static int cgi_pull(conn_t *c)
+{
+    char data[8192];
+    bool limited = c->plan.head.framing.kind == FRAMING_LENGTH;
+    bool chunked = c->plan.head.framing.kind == FRAMING_CHUNKED;
+    int fd = c->plan.body.pipe.out_fd;
+    ssize_t n;
+    if (limited && c->body_left == 0) {
+        return 2;
+    }
+    /* 머리 파싱 때 미리 읽은 본문이 있으면 pipe보다 먼저 쓴다. */
+    if (c->pipe_buf.len != 0) {
+        size_t take = c->pipe_buf.len < sizeof(data) ? c->pipe_buf.len : sizeof(data);
+        memcpy(data, c->pipe_buf.data, take);
+        buf_consume(&c->pipe_buf, take);
+        n = (ssize_t)take;
+    } else if (fd < 0) {
+        n = 0;
+    } else {
+        do {
+            n = read(fd, data, sizeof(data));
+        } while (n < 0 && errno == EINTR);
+        if (n < 0) {
+            return errno == EAGAIN || errno == EWOULDBLOCK ? 0 : -1;
+        }
+    }
+    if (n == 0) {
+        if (fd >= 0) {
+            xunwatch(c, fd);
+            close(fd);
+            c->plan.body.pipe.out_fd = -1;
+        }
+        if ((limited && c->body_left != 0) ||
+            (chunked && response_write_last_chunk(&c->wbuf) != 0)) {
+            return -1;
+        }
+        cgi_reap(c);
+        return 2;
+    }
+    if (limited && (uint64_t)n > c->body_left) {
+        n = (ssize_t)c->body_left;
+    }
+    if ((chunked ? response_write_chunk(data, (size_t)n, &c->wbuf)
+                 : buf_append(&c->wbuf, data, (size_t)n)) != 0) {
+        return -1;
+    }
+    c->response_bytes += (uint64_t)n;
+    if (limited) {
+        c->body_left -= (uint64_t)n;
+    }
+    return 1;
+}
+
+/* 역할: 업스트림 본문을 tracker로 잘라 이번 응답에 속한 바이트 수(up_pending)를 정한다.
+ * 바이트는 업스트림 rbuf에서 바로 보낸다(복사 없음). 1 있음, 0 EAGAIN, 2 끝, -1 오류. */
+static int upstream_pull(conn_t *c)
+{
+    upstream_conn_t *uc = c->plan.body.upstream.conn;
+    http_body_tracker_t *tracker = &c->plan.body.upstream.tracker;
+    size_t used = 0;
+    http_body_result_t result;
+    if (uc == NULL) {
+        return 2;
+    }
+    if (uc->rbuf.len == 0) {
+        ssize_t n = buf_read_fd(&uc->rbuf, uc->fd);
+        if (n < 0) {
+            return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR ? 0 : -1;
+        }
+        if (n == 0) {
+            /* 연결 종료로 끝나는 응답만 EOF가 정상이다. */
+            return tracker->f.kind == FRAMING_CLOSE ? 2 : -1;
+        }
+    }
+    result = http_body_track(tracker, uc->rbuf.data, uc->rbuf.len, &used);
+    if (result == BODY_ERROR || (used == 0 && result != BODY_DONE)) {
+        return -1;
+    }
+    c->up_pending = used;
+    c->response_bytes += used;
+    if (result == BODY_DONE) {
+        c->up_reuse = c->upstream_keep_alive;
+        return 2;
+    }
+    return 1;
+}
+
+/* 역할: v2 본문을 출처(CGI·업스트림)에서 읽어 클라이언트로 보낸다. 클라이언트가 막히면 출처 읽기를
+ * 멈추고(메모리 상한) 쓰기 가능을 기다린다. 출처가 비면 출처 읽기를 기다린다. */
+static conn_status_t v2_pump(conn_t *c, int64_t now_ms)
+{
+    for (;;) {
+        upstream_conn_t *uc = c->stage == V2_PROXY_BODY ? c->plan.body.upstream.conn : NULL;
+        int src = c->stage == V2_CGI_BODY ? c->plan.body.pipe.out_fd : uc != NULL ? uc->fd : -1;
+        /* 머리·CGI 본문은 wbuf에서, 업스트림 본문은 업스트림 rbuf에서 바로 보낸다. */
+        buf_t *out = c->wbuf.len != 0 ? &c->wbuf : uc != NULL ? &uc->rbuf : NULL;
+        size_t out_len = out == &c->wbuf ? c->wbuf.len : out != NULL ? c->up_pending : 0;
+        int r;
+        if (out_len != 0) {
+            ssize_t n = platform_send(c->fd, out->data, out_len);
+            if (n > 0) {
+                buf_consume(out, (size_t)n);
+                if (out != &c->wbuf) {
+                    c->up_pending -= (size_t)n;
+                }
+                continue;
+            }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                if (src >= 0 && xwatch(c, src, 0) != 0) {
+                    break;
+                }
+                return CONN_WANT_WRITE;
+            }
+            break;
+        }
+        if (c->body_done) {
+            if (uc != NULL) {
+                xunwatch(c, uc->fd);
+                upstream_release(uc, c->up_reuse && uc->rbuf.len == 0);
+                c->plan.body.upstream.conn = NULL;
+            }
+            return after_response(c, now_ms);
+        }
+        r = c->stage == V2_CGI_BODY ? cgi_pull(c) : upstream_pull(c);
+        if (r < 0) {
+            break;
+        }
+        if (r == 2) {
+            c->body_done = true;
+        } else if (r == 0) {
+            if (src < 0 || xwatch(c, src, EV_READ) != 0) {
+                break;
+            }
+            return v2_wait(c);
+        }
+    }
+    c->phase = CONN_FINISHED;
+    return CONN_CLOSE;
+}
+
+/* 역할: v2에서 응답 머리를 확정한 뒤 본문 중계를 시작한다. HEAD와 본문 없는 상태는 바로 끝낸다. */
+static conn_status_t v2_begin_body(conn_t *c, int64_t now_ms)
+{
+    int status = c->plan.head.status;
+    if (start_response(c, now_ms) != 0) {
+        c->phase = CONN_FINISHED;
+        return CONN_CLOSE;
+    }
+    c->body_left = c->plan.head.framing.length;
+    c->body_done = c->req.method == HTTP_HEAD || (status >= 100 && status < 200) || status == 204 ||
+                   status == 304;
+    return v2_pump(c, now_ms);
+}
+
+/* 역할: 모은 CGI 출력에서 머리를 찾는다. 찾으면 본문 단계로, 형식이 틀리거나 끝났으면 502. */
+static conn_status_t cgi_v2_try_head(conn_t *c, int64_t now_ms)
+{
+    http_head_out_t parsed_head;
+    size_t used = 0;
+    int status = 0;
+    http_parse_result_t result;
+    memset(&parsed_head, 0, sizeof(parsed_head));
+    result = cgi_parse_head(c->pipe_buf.data, c->pipe_buf.len, c->env.cfg->cgi_max_head,
+                            &parsed_head, &used, &status);
+    if (result == HTTP_PARSE_DONE) {
+        apply_cgi_head(c, &parsed_head, used);
+        c->stage = V2_CGI_BODY;
+        return v2_begin_body(c, now_ms);
+    }
+    buf_cleanup(&parsed_head.fields);
+    if (result == HTTP_PARSE_ERROR || c->plan.body.pipe.out_fd < 0) {
+        return respond_error(c, 502, now_ms);
+    }
+    return v2_wait(c);
+}
+
+/* 역할: v2 CGI pipe 이벤트. stdin에는 요청 본문을 쓰고, stdout은 머리 또는 본문으로 읽는다. */
+static conn_status_t cgi_v2_event(conn_t *c, int fd, int64_t now_ms)
+{
+    response_plan_t *p = &c->plan;
+    if (fd == p->body.pipe.in_fd) {
+        buf_t *in = &p->body.pipe.in_data;
+        ssize_t n = write(fd, in->data, in->len);
+        if (n > 0) {
+            buf_consume(in, (size_t)n);
+        }
+        /* 다 썼거나 자식이 stdin을 닫았으면(EPIPE) EOF를 알리고 그만 쓴다. */
+        if (in->len == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+            xunwatch(c, fd);
+            close(fd);
+            p->body.pipe.in_fd = -1;
+            buf_reset(in);
+        }
+        return c->stage == V2_CGI_BODY ? v2_pump(c, now_ms) : v2_wait(c);
+    }
+    if (c->stage == V2_CGI_BODY) {
+        return v2_pump(c, now_ms);
+    }
+    {
+        char temp[4096];
+        ssize_t n;
+        do {
+            n = read(fd, temp, sizeof(temp));
+        } while (n < 0 && errno == EINTR);
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return v2_wait(c);
+        }
+        if (n < 0 || (n > 0 && buf_append(&c->pipe_buf, temp, (size_t)n) != 0)) {
+            return respond_error(c, 502, now_ms);
+        }
+        if (n == 0) {
+            xunwatch(c, fd);
+            close(fd);
+            p->body.pipe.out_fd = -1;
+        }
+    }
+    return cgi_v2_try_head(c, now_ms);
+}
+
+/* 역할: v2 백엔드 교환을 막히지 않는 만큼 진행한다. 실패하면 proxy_on_fail의 판단대로 다른
+ * 백엔드로 다시 시작하거나 오류 계획을 보낸다. */
+static conn_status_t proxy_v2_step(conn_t *c, unsigned events, int64_t now_ms)
+{
+    for (;;) {
+        upstream_conn_t *uc = NULL;
+        http_response_t resp;
+        proxy_fail_t fail = PFAIL_CONNECT;
+        relay_status_t st = relay_step(c->relay, events, now_ms);
+        /* relay가 연결을 새로 열었을 수 있다(같은 fd 번호 재사용 포함). 등록을 매번 새로 한다. */
+        xunwatch(c, c->xfd[0]);
+        xunwatch(c, c->xfd[1]);
+        if (st == RELAY_WANT_READ || st == RELAY_WANT_WRITE) {
+            if (xwatch(c, relay_fd(c->relay), st == RELAY_WANT_WRITE ? EV_WRITE : EV_READ) != 0) {
+                return respond_error(c, 502, now_ms);
+            }
+            c->deadline_ms = relay_deadline_ms(c->relay);
+            return v2_wait(c);
+        }
+        memset(&resp, 0, sizeof(resp));
+        relay_take(c->relay, &uc, &resp, &fail);
+        relay_free(c->relay);
+        c->relay = NULL;
+        if (st == RELAY_OK) {
+            if (proxy_on_head(&c->job, uc, &resp, &c->plan) != 0) {
+                return send_plan(c, now_ms);
+            }
+            c->upstream_resp = resp;
+            c->upstream_keep_alive = resp.keep_alive;
+            if (c->plan.kind == BODY_UPSTREAM && c->plan.body.upstream.conn != NULL) {
+                buf_consume(&c->plan.body.upstream.conn->rbuf, resp.head_len);
+            }
+            c->stage = V2_PROXY_BODY;
+            return v2_begin_body(c, now_ms);
+        }
+        if (proxy_on_fail(&c->job, fail, &c->plan) == PROXY_GIVE_UP) {
+            return send_plan(c, now_ms);
+        }
+        c->relay = relay_start(&c->job, c->env.lim, now_ms, c->env.cfg->upstream_connect_timeout_ms,
+                               c->env.cfg->upstream_response_timeout_ms);
+        if (c->relay == NULL) {
+            return respond_error(c, 502, now_ms);
+        }
+        events = 0;
+    }
+}
+
+/* 역할: v2 단계 중 추가 fd(pipe·업스트림)의 이벤트를 단계에 맞는 처리로 보낸다. */
+static conn_status_t v2_on_fd(conn_t *c, int fd, unsigned events, int64_t now_ms)
+{
+    switch (c->stage) {
+    case V2_PROXY_HEAD:
+        return proxy_v2_step(c, events, now_ms);
+    case V2_CGI_HEAD:
+    case V2_CGI_BODY:
+        return cgi_v2_event(c, fd, now_ms);
+    case V2_PROXY_BODY:
+        return v2_pump(c, now_ms);
+    case V2_NONE:
+        break;
+    }
+    return CONN_CLOSE;
+}
+
+/* 역할: v2 단계 중 클라이언트 fd 이벤트. 쓰기 가능이면 본문을 이어 보내고, 읽기면 끊김만 본다. */
+static conn_status_t v2_on_client(conn_t *c, unsigned events, int64_t now_ms)
+{
+    if ((events & EV_ERROR) != 0) {
+        c->phase = CONN_FINISHED;
+        return CONN_CLOSE;
+    }
+    if ((events & EV_WRITE) != 0 && (c->stage == V2_CGI_BODY || c->stage == V2_PROXY_BODY)) {
+        return v2_pump(c, now_ms);
+    }
+    if ((events & EV_READ) != 0) {
+        char byte;
+        ssize_t n;
+        do {
+            n = recv(c->fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+        } while (n < 0 && errno == EINTR);
+        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            c->phase = CONN_FINISHED;
+            return CONN_CLOSE;
+        }
+        if (n > 0) {
+            /* 다음 요청이 미리 왔다. 레벨 트리거라 계속 깨지 않게 이 응답이 끝날 때까지 쉰다. */
+            c->client_quiet = true;
+        }
+    }
+    return v2_wait(c);
 }
 
 /* 역할: 연결 객체/버퍼를 생성하고 blocking 설정을 적용한다. 성공 뒤 fd 소유권은 conn으로 간다. */
@@ -853,6 +1312,7 @@ conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *
     if (c == NULL) {
         return NULL;
     }
+    c->xfd[0] = c->xfd[1] = -1;
     c->fd = fd;
     c->env = *env;
     if (peer != NULL) {
@@ -927,6 +1387,7 @@ void conn_free(conn_t *c)
         return;
     }
     /* 연결이 어느 단계에서 끝났든 계획·프록시 버퍼·소켓을 모두 회수한다. */
+    v2_reset(c);
     plan_cleanup(&c->plan);
     proxy_job_cleanup(&c->job);
     buf_cleanup(&c->pipe_buf);
@@ -967,8 +1428,14 @@ static ssize_t read_client_once(conn_t *c)
 conn_status_t conn_on_event(conn_t *c, int fd, unsigned events, int64_t now_ms)
 {
     /* v2 진입점: 이벤트가 난 fd를 처리하고 엔진에 다음 대기 상태를 알려준다. */
-    if (c == NULL || c->fd < 0 || c->phase == CONN_FINISHED || fd != c->fd) {
+    if (c == NULL || c->fd < 0 || c->phase == CONN_FINISHED) {
         return CONN_CLOSE;
+    }
+    if (fd != c->fd) {
+        return c->stage != V2_NONE ? v2_on_fd(c, fd, events, now_ms) : CONN_CLOSE;
+    }
+    if (c->stage != V2_NONE) {
+        return v2_on_client(c, events, now_ms);
     }
     if ((events & EV_ERROR) != 0) {
         c->phase = CONN_FINISHED;
@@ -1114,9 +1581,14 @@ conn_status_t conn_on_event(conn_t *c, int fd, unsigned events, int64_t now_ms)
         }
         /* 요청이 완성되면 dispatch해 응답 계획을 만들고 송신 상태로 간다. */
         c->deadline_ms = -1;
-        if (dispatch_request(c, now_ms) != 0) {
+        int dispatched = dispatch_request(c, now_ms);
+        if (dispatched < 0) {
             c->phase = CONN_FINISHED;
             return CONN_CLOSE;
+        }
+        if (dispatched > 0) {
+            /* v2: CGI는 pipe 등록을 마쳤고, 프록시는 첫 relay 단계를 여기서 진행한다. */
+            return c->stage == V2_PROXY_HEAD ? proxy_v2_step(c, 0, now_ms) : v2_wait(c);
         }
         return flush_response(c, now_ms);
     }
@@ -1131,7 +1603,17 @@ conn_status_t conn_on_timeout(conn_t *c, int64_t now_ms)
         return CONN_CLOSE;
     }
     if (c->deadline_ms < 0 || now_ms < c->deadline_ms) {
+        if (c->stage == V2_CGI_HEAD || c->stage == V2_PROXY_HEAD) {
+            return v2_wait(c);
+        }
         return c->phase == CONN_WRITING ? CONN_WANT_WRITE : CONN_WANT_READ;
+    }
+    /* v2 백엔드 교환은 relay가 마감 단계를 판단한다(연결 실패·응답 504). CGI 머리 대기는 504. */
+    if (c->stage == V2_PROXY_HEAD) {
+        return proxy_v2_step(c, 0, now_ms);
+    }
+    if (c->stage == V2_CGI_HEAD) {
+        return respond_error(c, 504, now_ms);
     }
     if (c->phase == CONN_WRITING) {
         c->phase = CONN_FINISHED;
