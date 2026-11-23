@@ -124,7 +124,7 @@ int poller_del(poller_t *p, int fd)
     }
     EV_SET(&changes[0], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
     EV_SET(&changes[1], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-    if (kevent(p->fd, changes, 2, NULL, 0, NULL) < 0 && errno != ENOENT)
+    if (kevent(p->fd, changes, 2, NULL, 0, NULL) < 0 && errno != ENOENT && errno != EBADF)
         return -1;
     if (i + 1 < p->n) {
         size_t j;
