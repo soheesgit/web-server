@@ -8,6 +8,7 @@
 http_parse_result_t http_find_head_end(const char *p, size_t len, size_t max_head, size_t *out_skip,
                                        size_t *out_head_len, int *out_status)
 {
+    /* 수신 버퍼에 본문이나 다음 메시지까지 있어도 헤더 한도까지만 탐색한다. */
     const size_t available = len < max_head ? len : max_head;
     size_t start = 0;
     size_t first = 0;
@@ -21,6 +22,7 @@ http_parse_result_t http_find_head_end(const char *p, size_t len, size_t max_hea
 
         const size_t end = (size_t)(lf - p) + 1;
         const bool empty = end - start == 1 || (end - start == 2 && p[start] == '\r');
+        /* 선행 빈 줄은 건너뛰고, 시작 줄을 본 뒤의 빈 줄에서만 머리를 끝낸다. */
         if (empty && saw_start_line) {
             *out_skip = first;
             *out_head_len = end;
@@ -53,6 +55,7 @@ static bool parse_field(str_t line, http_header_t *out)
     size_t name_len = (size_t)(colon - line.ptr);
     str_t name = {line.ptr, name_len};
     str_t value = {colon + 1, line.len - name_len - 1};
+    /* 이름은 받은 그대로 검사하고, 값은 제어 문자를 검사한 뒤 앞뒤 공백만 뗀다. */
     if (!http_token_valid(name)) {
         return false;
     }
@@ -94,6 +97,7 @@ int http_parse_headers(const char *p, size_t len, size_t max_headers, http_heade
             *out_status = 431;
             return -1;
         }
+        /* 길이 헤더 등의 중복을 나중에 검사할 수 있게 원래 순서대로 보존한다. */
         out_h->v[out_h->n++] = field;
     }
     return 0;
@@ -150,6 +154,7 @@ bool http_is_hop_by_hop(str_t name, const http_headers_t *h)
         }
     }
 
+    /* 고정 목록 외에도 Connection 값에 나열된 필드가 이 연결에서만 유효하다. */
     for (size_t i = 0; h != NULL && i < h->n; ++i) {
         const http_header_t *field = &h->v[i];
         if (!str_eq_ci(field->name, "Connection")) {
@@ -176,6 +181,7 @@ int http_headers_write(const http_headers_t *h, bool skip_hop_by_hop, buf_t *out
         const str_t parts[] = {field.name, STR_LIT(": "), field.value, STR_LIT("\r\n")};
         for (size_t part = 0; part < sizeof(parts) / sizeof(*parts); ++part) {
             if (buf_append(out, parts[part].ptr, parts[part].len) < 0) {
+                /* 이번 호출이 붙인 헤더 전체를 논리적으로 되돌린다. */
                 out->len = start;
                 return -1;
             }

@@ -4,7 +4,7 @@
 #include "common/http_headers.h"
 #include "common/internal_http_text.h"
 
-/* 받은 순서대로 헤더의 목록을 검사하고 일치하는 길이만 받아들인다. */
+/* 한 줄의 쉼표 목록과 여러 Content-Length 줄에 같은 길이 규칙을 적용한다. */
 static bool read_content_length(str_t list, http_framing_t *framing)
 {
     if (list.ptr == NULL) {
@@ -21,6 +21,7 @@ static bool read_content_length(str_t list, http_framing_t *framing)
     return true;
 }
 
+/* chunked를 만나면 이후 다른 줄을 포함해 추가 코딩을 거부한다. */
 static bool read_transfer_encoding(str_t list, http_framing_t *framing)
 {
     if (list.ptr == NULL) {
@@ -44,12 +45,14 @@ int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
     http_framing_t framing = {FRAMING_NONE, 0};
     bool has_encoding = false;
 
+    /* HEAD 응답과 1xx·204·304는 응답 헤더에 길이가 있어도 실제 본문이 없다. */
     if (is_response &&
         (req_method == HTTP_HEAD || status / 100 == 1 || status == 204 || status == 304)) {
         *out_f = framing;
         return 0;
     }
 
+    /* 본문 경계를 한 가지 방식으로 해석하도록 길이와 전송 코딩의 병기를 거부한다. */
     for (size_t i = 0; i < h->n; ++i) {
         const http_header_t *field = &h->v[i];
         if (str_eq_ci(field->name, "Content-Length")) {
@@ -67,6 +70,7 @@ int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
     if (has_encoding && framing.kind != FRAMING_CHUNKED) {
         goto invalid_framing;
     }
+    /* 길이 정보가 없으면 요청은 여기서 끝나고, 응답은 연결이 닫힐 때 끝난다. */
     if (is_response && framing.kind == FRAMING_NONE) {
         framing.kind = FRAMING_CLOSE;
     }
@@ -89,6 +93,7 @@ bool http_keep_alive(int minor, const http_headers_t *h)
 
         for (str_t list = field->value; list.len != 0;) {
             str_t token = http_pop_list_item(&list);
+            /* 여러 Connection 헤더에 keep-alive와 close가 함께 있으면 close가 우선한다. */
             if (str_eq_ci(token, "close")) {
                 return false;
             }
@@ -131,6 +136,7 @@ static chunk_phase_t chunk_size_end(uint64_t size)
     return size != 0 ? CHUNK_DATA : CHUNK_TRAILER_START;
 }
 
+/* 크기 줄과 구분자, 트레일러를 한 바이트씩 검사한다. 본문 데이터는 별도로 건너뛴다. */
 static chunk_phase_t read_chunk_metadata(chunk_phase_t phase, unsigned char c, uint64_t *remaining,
                                          int *digits)
 {
@@ -219,13 +225,14 @@ static size_t consume_data(uint64_t *remaining, size_t available)
 static http_body_result_t track_chunks(http_body_tracker_t *t, const char *p, size_t len,
                                        size_t *out_used)
 {
-    /* state에 단계와 크기 줄의 자릿수를 저장한다. */
+    /* state의 몫은 현재 단계, 나머지는 읽은 크기 숫자 개수다. 다음 수신에서 복원한다. */
     chunk_phase_t phase = (chunk_phase_t)(t->state / CHUNK_STATE_RADIX);
     int digits = t->state % CHUNK_STATE_RADIX;
     size_t used = 0;
 
     while (used < len && phase != CHUNK_INVALID && phase != CHUNK_COMPLETE) {
         if (phase == CHUNK_DATA) {
+            /* 청크 데이터 안에서는 줄 끝도 그대로 데이터로 센다. */
             used += consume_data(&t->remaining, len - used);
             if (t->remaining == 0) {
                 phase = CHUNK_DATA_END;
@@ -262,6 +269,7 @@ http_body_result_t http_body_track(http_body_tracker_t *t, const char *p, size_t
     case FRAMING_CHUNKED:
         return track_chunks(t, p, len, out_used);
     case FRAMING_CLOSE:
+        /* 이 함수는 소켓을 읽지 않으므로 EOF 여부는 호출자가 판정한다. */
         *out_used = len;
         return BODY_MORE;
     case FRAMING_NONE:

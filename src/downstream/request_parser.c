@@ -7,6 +7,7 @@
 #include "common/http_headers.h"
 #include "downstream/uri.h"
 
+/* 요청 줄이 끝나기를 기다리는 중에도 선행 빈 줄을 제외하고 길이 한도를 확인한다. */
 static bool unfinished_line_too_long(const char *p, size_t len, size_t max_uri)
 {
     size_t off = 0;
@@ -67,6 +68,7 @@ static int decode_version(str_t version, int *out)
         return 400;
     }
 
+    /* 버전 표기가 잘못된 경우(400)와 지원하지 않는 버전인 경우(505)를 구분한다. */
     bool dot = false;
     for (size_t i = 5; i < version.len; ++i) {
         char c = version.ptr[i];
@@ -116,6 +118,7 @@ static int decode_target(http_request_t *req)
         }
     }
 
+    /* 업스트림에 전달할 원본 경로와 라우터가 사용할 디코딩된 경로를 따로 보관한다. */
     if (uri_split(path_query, &req->raw_path, &req->query) < 0 ||
         uri_decode_path(req->raw_path, req->path, sizeof(req->path), NULL) < 0 ||
         path_normalize(req->path) < 0) {
@@ -152,6 +155,7 @@ static int read_request_fields(const char *p, size_t len, const http_limits_t *l
     if (http_parse_headers(p, len, lim->max_headers, &req->headers, &status) < 0) {
         return status;
     }
+    /* 절대 URI의 호스트는 요청 줄에서 이미 정했다. 경로 형식에서만 Host를 읽는다. */
     if (req->target.ptr[0] == '/') {
         if (req->minor == 1 && http_header_count(&req->headers, "Host") != 1) {
             return 400;
@@ -165,6 +169,7 @@ static int read_request_fields(const char *p, size_t len, const http_limits_t *l
     if (http_resolve_framing(&req->headers, false, 0, req->method, &req->framing, &status) < 0) {
         return status;
     }
+    /* 공통 파서는 chunked를 인식하지만 요청 처리는 아직 D-003의 501 정책을 따른다. */
     if (req->framing.kind == FRAMING_CHUNKED) {
         return 501;
     }
@@ -194,6 +199,7 @@ http_parse_result_t request_parse_head(const char *p, size_t len, const http_lim
     if (line_len != 0 && start[line_len - 1] == '\r') {
         --line_len;
     }
+    /* 검증을 끝낸 뒤 결과를 넘긴다. 범위 필드들은 원본 수신 버퍼를 빌린다. */
     http_request_t req = {0};
     int status = read_start_line((str_t){start, line_len}, lim->max_uri, &req);
     if (status == 0) {
@@ -206,6 +212,7 @@ http_parse_result_t request_parse_head(const char *p, size_t len, const http_lim
         return HTTP_PARSE_ERROR;
     }
 
+    /* 여기서 본문을 읽지 않는다. 호출자가 이 위치부터 이어서 처리한다. */
     req.head_len = total;
     req.keep_alive = http_keep_alive(req.minor, &req.headers);
     *out_req = req;

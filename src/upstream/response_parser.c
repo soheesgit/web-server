@@ -16,6 +16,7 @@ static bool is_digit(char c)
 
 static bool parse_status_line(const char *p, size_t len, http_response_t *out)
 {
+    /* 필수 부분은 고정 위치까지 확인하고, 선택 사유 문구는 길이와 함께 빌린다. */
     if (len < 12 || memcmp(p, "HTTP/1.", 7) != 0 || !is_digit(p[7]) || p[8] != ' ' || p[9] < '1' ||
         p[9] > '5' || !is_digit(p[10]) || !is_digit(p[11]) || (len > 12 && p[12] != ' ')) {
         return false;
@@ -44,6 +45,7 @@ http_parse_result_t response_parse_head(const char *p, size_t len, http_method_t
     http_parse_result_t result =
         http_find_head_end(p, len, lim->max_head, &skip, &head_len, &status);
 
+    /* 수신 중이면 더 기다린다. 완성된 응답의 형식 오류와 한도 초과는 502로 처리한다. */
     if (result == HTTP_PARSE_INCOMPLETE) {
         return result;
     }
@@ -57,11 +59,13 @@ http_parse_result_t response_parse_head(const char *p, size_t len, http_method_t
         if (line_len > 0 && line[line_len - 1] == '\r') {
             line_len--;
         }
+        /* 헤더 원본을 파싱해 본문 방식을 정한다. 헤더 필터링은 전달하는 쪽에서 한다. */
         if (parse_status_line(line, line_len, &resp) &&
             http_parse_headers(p + headers_off, head_len - blank_len - headers_off,
                                lim->max_headers, &resp.headers, &status) == 0 &&
             http_resolve_framing(&resp.headers, true, resp.status, req_method, &resp.framing,
                                  &status) == 0) {
+            /* 연결을 닫아 본문의 끝을 알리는 응답은 업스트림 연결을 재사용할 수 없다. */
             resp.keep_alive =
                 resp.framing.kind != FRAMING_CLOSE && http_keep_alive(resp.minor, &resp.headers);
             resp.head_len = head_len;

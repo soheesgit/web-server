@@ -36,6 +36,7 @@ const char *http_reason(int status)
 
 int http_error_body(int status, buf_t *out)
 {
+    /* 응답 상태 줄과 오류 페이지가 같은 상태 문구를 사용하도록 한곳에서 조회한다. */
     const char *reason = http_reason(status);
     const char *format = "<!doctype html><title>%03d %s</title><h1>%03d %s</h1>\n";
     return buf_appendf(out, format, status, reason, status, reason);
