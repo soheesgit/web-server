@@ -1,5 +1,14 @@
-/* 클라이언트 연결의 blocking 요청 처리. */
 #include "downstream/conn.h"
+
+#include "common/http_framing.h"
+#include "core/log.h"
+#include "core/platform.h"
+#include "core/stub.h"
+#include "downstream/request_parser.h"
+#include "downstream/response_writer.h"
+#include "handler/handler.h"
+#include "handler/plan.h"
+#include "upstream/relay.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -12,118 +21,89 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "common/http_framing.h"
-#include "common/http_headers.h"
-#include "core/log.h"
-#include "core/platform.h"
-#include "core/stub.h"
-#include "downstream/request_parser.h"
-#include "downstream/response_writer.h"
-#include "handler/handler.h"
-#include "handler/plan.h"
-#include "upstream/relay.h"
-
-enum { CONN_IO_CHUNK = 16384, CONN_WRITE_CAP = 128 * 1024 };
+enum { CONN_IO_SIZE = 8192, CONN_SOCKET_TICK_MS = 100, CONN_DRAIN_MS = 1000 };
 
 struct conn {
     int fd;
     const conn_env_t *env;
-    char ip[INET6_ADDRSTRLEN];
-    uint16_t port;
-    /* 헤더·본문 수신, 송신, 외부 응답 대기 중 현재 적용되는 단조 시계 마감이다. */
-    int64_t deadline;
-    bool finished;
-    bool watch_peer_input;
-    bool upstream_reusable;
-    /* 한 요청을 처리하는 동안 input의 헤더·본문 구간을 요청 객체가 빌린다. */
+    int64_t deadline_ms;
+    int64_t header_deadline_ms;
+    bool idle;
+    bool peer_has_input;
+    bool upstream_keep_alive;
+    unsigned requests;
+    char client_ip[INET6_ADDRSTRLEN];
+    uint16_t server_port;
     buf_t input;
     buf_t output;
+    buf_t cgi_output;
     response_plan_t plan;
     proxy_job_t job;
 };
 
-static int64_t after_ms(int64_t now, int ms)
+static int64_t after_ms(int64_t now, int timeout)
 {
-    if (now < 0 || ms <= 0) {
+    if (now < 0 || timeout <= 0) {
         return now;
     }
-    return now <= INT64_MAX - ms ? now + ms : INT64_MAX;
+    return now <= INT64_MAX - timeout ? now + timeout : INT64_MAX;
 }
 
 static int64_t earlier(int64_t a, int64_t b)
 {
-    if (a < 0) {
-        return b;
-    }
-    return b >= 0 && b < a ? b : a;
+    return a < b ? a : b;
 }
 
-static int poll_until(struct pollfd *fds, nfds_t n, int64_t deadline)
+static bool would_block(void)
 {
-    /* 매번 절대 마감까지 남은 시간만 기다린다. 재시도해도 마감은 늘어나지 않는다. */
-    for (;;) {
-        int timeout = -1;
-        if (deadline >= 0) {
-            int64_t now = platform_now_ms();
-            if (now < 0) {
-                return -1;
-            }
-            if (now >= deadline) {
-                errno = ETIMEDOUT;
-                return -1;
-            }
-            int64_t left = deadline - now;
-            timeout = left > INT_MAX ? INT_MAX : (int)left;
-        }
-        int ready = poll(fds, n, timeout);
-        if (ready > 0) {
-            return 0;
-        }
-        /* EINTR과 플랫폼의 poll 대기 상한 모두 남은 시각으로 다시 계산한다. */
-        if (ready < 0 && errno != EINTR) {
-            return -1;
-        }
-    }
+    return errno == EAGAIN || errno == EWOULDBLOCK;
 }
 
-static int wait_socket(int fd, short events, int64_t deadline)
+static int set_client_mode(int fd, bool nonblocking)
 {
-    struct pollfd watched = {.fd = fd, .events = events};
-    return poll_until(&watched, 1, deadline);
+    if (nonblocking) {
+        return platform_set_nonblock(fd);
+    }
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+        return -1;
+    }
+    const struct timeval timeout = {0, CONN_SOCKET_TICK_MS * 1000};
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+        return -1;
+    }
+    return 0;
 }
 
-static bool would_wait(void)
+static void set_addresses(conn_t *c, const struct sockaddr_storage *peer)
 {
-    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
-}
-
-static void set_address(conn_t *c, const struct sockaddr_storage *peer)
-{
-    const void *address = NULL;
-    if (peer != NULL && peer->ss_family == AF_INET) {
-        address = &((const struct sockaddr_in *)peer)->sin_addr;
-    } else if (peer != NULL && peer->ss_family == AF_INET6) {
-        address = &((const struct sockaddr_in6 *)peer)->sin6_addr;
-    }
-    if (address == NULL || inet_ntop(peer->ss_family, address, c->ip, sizeof(c->ip)) == NULL) {
-        memcpy(c->ip, "-", 2);
-    }
-
     struct sockaddr_storage local;
-    socklen_t length = sizeof(local);
-    if (getsockname(c->fd, (struct sockaddr *)&local, &length) == 0 && local.ss_family == AF_INET &&
-        length >= sizeof(struct sockaddr_in)) {
-        c->port = ntohs(((const struct sockaddr_in *)&local)->sin_port);
-    } else {
-        c->port = c->env->cfg->port;
+    socklen_t size = sizeof(local);
+    memcpy(c->client_ip, "-", 2);
+    if (peer != NULL && peer->ss_family == AF_INET) {
+        const struct sockaddr_in *address = (const struct sockaddr_in *)peer;
+        (void)inet_ntop(AF_INET, &address->sin_addr, c->client_ip, sizeof(c->client_ip));
+    } else if (peer != NULL && peer->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *address = (const struct sockaddr_in6 *)peer;
+        (void)inet_ntop(AF_INET6, &address->sin6_addr, c->client_ip, sizeof(c->client_ip));
+    }
+    if (getsockname(c->fd, (struct sockaddr *)&local, &size) == 0) {
+        if (local.ss_family == AF_INET) {
+            c->server_port = ntohs(((const struct sockaddr_in *)&local)->sin_port);
+        } else if (local.ss_family == AF_INET6) {
+            c->server_port = ntohs(((const struct sockaddr_in6 *)&local)->sin6_port);
+        }
     }
 }
 
 conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *env, int64_t now_ms)
 {
-    const http_limits_t *lim = env->lim;
-    if (lim->max_head == SIZE_MAX || lim->max_body > SIZE_MAX - lim->max_head - 1) {
-        errno = EOVERFLOW;
+    size_t max_head = env->lim->max_head;
+    size_t cgi_head = env->cfg->cgi_max_head;
+    size_t out_head = max_head > cgi_head ? max_head : cgi_head;
+    if (out_head > SIZE_MAX - CONN_IO_SIZE - 512 || env->lim->max_body > SIZE_MAX - max_head - 1) {
+        errno = EMSGSIZE;
         return NULL;
     }
 
@@ -131,39 +111,20 @@ conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *
     if (c == NULL) {
         return NULL;
     }
-    c->fd = fd;
+    c->fd = -1;
     c->env = env;
-    c->deadline = after_ms(now_ms, env->cfg->header_timeout_ms);
+    if (buf_init(&c->input, 0, max_head + (size_t)env->lim->max_body + 1) < 0 ||
+        buf_init(&c->output, 0, out_head + CONN_IO_SIZE + 512) < 0 ||
+        set_client_mode(fd, env->nonblocking) < 0) {
+        conn_free(c);
+        return NULL;
+    }
     plan_init(&c->plan);
-    /* 한도에 딱 맞는 머리와 한 바이트 초과한 머리를 구분할 여유를 둔다. */
-    if (buf_init(&c->input, 0, lim->max_head + (size_t)lim->max_body + 1) < 0 ||
-        buf_init(&c->output, 0, CONN_WRITE_CAP) < 0) {
-        goto failed;
-    }
-
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0) {
-        goto failed;
-    }
-    if (!env->nonblocking) {
-        /* poll 이후 실제 blocking 읽기나 쓰기도 짧은 주기 안에 돌아오도록 한다. */
-        const struct timeval period = {.tv_usec = 100000};
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &period, sizeof(period)) < 0 ||
-            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &period, sizeof(period)) < 0) {
-            goto failed;
-        }
-    }
-    int mode = env->nonblocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK;
-    if (mode != flags && fcntl(fd, F_SETFL, mode) < 0) {
-        goto failed;
-    }
-    set_address(c, peer);
+    c->fd = fd;
+    set_addresses(c, peer);
+    c->header_deadline_ms = after_ms(now_ms, env->cfg->header_timeout_ms);
+    c->deadline_ms = c->header_deadline_ms;
     return c;
-
-failed:
-    c->fd = -1; /* 실패하면 호출자가 소켓을 계속 소유한다. */
-    conn_free(c);
-    return NULL;
 }
 
 void conn_free(conn_t *c)
@@ -172,677 +133,627 @@ void conn_free(conn_t *c)
         return;
     }
     int saved = errno;
-    plan_cleanup(&c->plan);
     proxy_job_cleanup(&c->job);
-    buf_cleanup(&c->input);
+    plan_cleanup(&c->plan);
+    buf_cleanup(&c->cgi_output);
     buf_cleanup(&c->output);
+    buf_cleanup(&c->input);
     if (c->fd >= 0) {
-        (void)close(c->fd);
+        close(c->fd);
     }
     free(c);
     errno = saved;
 }
 
-static ssize_t receive_client(conn_t *c)
+static int poll_until(struct pollfd *fds, nfds_t count, int64_t deadline)
 {
     for (;;) {
-        if (wait_socket(c->fd, POLLIN, c->deadline) < 0) {
+        int64_t now = platform_now_ms();
+        if (now < 0 || now >= deadline) {
+            errno = ETIMEDOUT;
             return -1;
         }
-        ssize_t n = buf_read_fd(&c->input, c->fd);
-        if (n >= 0 || !would_wait()) {
-            return n;
+        int64_t remaining = deadline - now;
+        int ready = poll(fds, count, remaining > INT_MAX ? INT_MAX : (int)remaining);
+        if (ready > 0) {
+            return 0;
+        }
+        if (ready < 0 && errno != EINTR) {
+            return -1;
         }
     }
 }
 
-/* 0은 요청 완료, -1은 응답 없이 종료, 양수는 보낼 오류 상태다. */
-static int read_request(conn_t *c, int64_t head_deadline, http_request_t *req)
+static ssize_t receive_request_bytes(conn_t *c, size_t limit)
 {
-    const http_limits_t *lim = c->env->lim;
-    int status;
-    http_parse_result_t parsed;
-
-    do {
-        /* keep-alive로 남아 있는 파이프라인 요청은 읽기 전에 먼저 파싱한다. */
-        parsed = request_parse_head(c->input.data, c->input.len, lim, req, &status);
-        if (parsed == HTTP_PARSE_ERROR) {
-            return status;
-        }
-        if (parsed == HTTP_PARSE_INCOMPLETE) {
-            ssize_t n = receive_client(c);
-            if (n < 0) {
-                return errno == ETIMEDOUT && c->input.len != 0 ? 408 : -1;
-            }
-            if (n == 0) {
-                return c->input.len != 0 ? 400 : -1;
-            }
-            /* 첫 바이트를 받은 뒤에는 유휴 마감 대신 미리 계산한 헤더 마감을 쓴다. */
-            c->deadline = head_deadline;
-        }
-    } while (parsed == HTTP_PARSE_INCOMPLETE);
-
-    if (req->framing.kind != FRAMING_LENGTH || req->framing.length == 0) {
-        return 0;
-    }
-
-    size_t length = (size_t)req->framing.length;
-    size_t total = req->head_len + length;
-    if (c->input.len < total) {
-        int64_t now = platform_now_ms();
-        if (now < 0) {
+    char data[CONN_IO_SIZE];
+    size_t amount = limit < sizeof(data) ? limit : sizeof(data);
+    struct pollfd client = {c->fd, POLLIN, 0};
+    for (;;) {
+        if (poll_until(&client, 1, c->deadline_ms) < 0) {
             return -1;
         }
-        c->deadline = after_ms(now, c->env->cfg->body_timeout_ms);
-        do {
-            ssize_t n = receive_client(c);
-            if (n < 0) {
-                return errno == ETIMEDOUT ? 408 : -1;
+        ssize_t n = recv(c->fd, data, amount, 0);
+        if (n < 0 && (errno == EINTR || would_block())) {
+            continue;
+        }
+        if (n > 0 && buf_append(&c->input, data, (size_t)n) < 0) {
+            return -1;
+        }
+        return n;
+    }
+}
+
+/* 머리 한도를 채울 때까지 시작 줄에 NUL이 있으면 HTTP 응답 없이 종료한다 (E-ER-12). */
+static bool binary_start_line(const buf_t *input)
+{
+    const char *newline = memchr(input->data, '\n', input->len);
+    size_t len = newline == NULL ? input->len : (size_t)(newline - input->data);
+    return memchr(input->data, '\0', len) != NULL;
+}
+
+/* 0: 요청 완료, -1: 응답 없이 종료, 양수: 오류 응답의 HTTP 상태. */
+static int receive_request(conn_t *c, http_request_t *req, size_t *out_size)
+{
+    int status = 500;
+    size_t limit = c->env->lim->max_head + 1;
+    for (;;) {
+        if (c->input.len != 0) {
+            http_parse_result_t result =
+                request_parse_head(c->input.data, c->input.len, c->env->lim, req, &status);
+            if (result == HTTP_PARSE_DONE) {
+                break;
             }
-            if (n == 0) {
-                return 400;
+            if (result == HTTP_PARSE_ERROR) {
+                return status == 431 && binary_start_line(&c->input) ? -1 : status;
             }
-        } while (c->input.len < total);
-        /* 본문 추가로 버퍼 주소가 바뀌었을 수 있어 헤더와 원본 URI 뷰를 다시 만든다. */
-        if (request_parse_head(c->input.data, c->input.len, lim, req, &status) != HTTP_PARSE_DONE) {
-            return 400;
+        }
+        if (c->input.len >= limit) {
+            return -1;
+        }
+        ssize_t n = receive_request_bytes(c, limit - c->input.len);
+        if (n <= 0) {
+            return n < 0 && errno == ETIMEDOUT && c->input.len != 0 ? 408 : -1;
+        }
+        if (c->idle) {
+            c->idle = false;
+            c->deadline_ms = c->header_deadline_ms;
+            if (platform_now_ms() >= c->deadline_ms) {
+                return 408;
+            }
         }
     }
-    req->body = (str_t){c->input.data + req->head_len, length};
+
+    size_t head_len = req->head_len;
+    size_t body_len = req->framing.kind == FRAMING_LENGTH ? (size_t)req->framing.length : 0;
+    size_t total = head_len + body_len;
+    if (c->input.len < total) {
+        c->deadline_ms = after_ms(platform_now_ms(), c->env->cfg->body_timeout_ms);
+        while (c->input.len < total) {
+            ssize_t n = receive_request_bytes(c, total - c->input.len);
+            if (n <= 0) {
+                return n < 0 && errno == ETIMEDOUT ? 408 : -1;
+            }
+        }
+        /* 본문을 받는 동안 수신 버퍼가 이동했을 수 있으므로 빌린 뷰를 다시 만든다. */
+        if (request_parse_head(c->input.data, head_len, c->env->lim, req, &status) !=
+            HTTP_PARSE_DONE) {
+            return 500;
+        }
+    }
+    if (body_len != 0) {
+        req->body = (str_t){c->input.data + head_len, body_len};
+    }
+    *out_size = total;
     return 0;
 }
 
-static int send_bytes(conn_t *c, const void *data, size_t len, int64_t hard_deadline,
-                      uint64_t *sent)
+static void extend_send_deadline(conn_t *c)
 {
-    const char *p = data;
-    int stall = c->env->cfg->body_timeout_ms;
-    int64_t now = platform_now_ms();
-    if (len != 0 && now < 0) {
-        return -1;
-    }
-    /* 송신에 진전이 있으면 정체 마감을 갱신하되 CGI 자체 마감은 넘기지 않는다. */
-    c->deadline = earlier(after_ms(now, stall), hard_deadline);
+    c->deadline_ms = after_ms(platform_now_ms(), c->env->cfg->body_timeout_ms);
+}
 
-    while (len != 0) {
-        if (wait_socket(c->fd, POLLOUT, c->deadline) < 0) {
+static int wait_to_send(conn_t *c)
+{
+    int64_t deadline = c->deadline_ms;
+    if (c->plan.kind == BODY_PIPE) {
+        deadline = earlier(deadline, c->plan.body.pipe.deadline_ms);
+    }
+    struct pollfd client = {c->fd, POLLOUT, 0};
+    return poll_until(&client, 1, deadline);
+}
+
+static int send_bytes(conn_t *c, const char *data, size_t len, uint64_t *sent)
+{
+    size_t offset = 0;
+    while (offset < len) {
+        if (wait_to_send(c) < 0) {
             return -1;
         }
-        size_t batch = len < CONN_IO_CHUNK ? len : CONN_IO_CHUNK;
-        ssize_t n = platform_send(c->fd, p, batch);
-        if (n > 0) {
-            if (sent != NULL) {
-                *sent += (uint64_t)n;
-            }
-            p += n;
-            len -= (size_t)n;
-            if (len != 0) {
-                now = platform_now_ms();
-                if (now < 0) {
-                    return -1;
-                }
-                c->deadline = earlier(after_ms(now, stall), hard_deadline);
-            }
-        } else if (n == 0 || !would_wait()) {
+        size_t left = len - offset;
+        ssize_t n = platform_send(c->fd, data + offset, left < CONN_IO_SIZE ? left : CONN_IO_SIZE);
+        if (n < 0 && would_block()) {
+            continue;
+        }
+        if (n <= 0) {
             return -1;
         }
+        offset += (size_t)n;
+        if (sent != NULL) {
+            *sent += (uint64_t)n;
+        }
+        extend_send_deadline(c);
     }
     return 0;
 }
 
 static int send_file(conn_t *c, uint64_t *sent)
 {
-    int stall = c->env->cfg->body_timeout_ms;
-    off_t position = c->plan.body.file.off;
-    off_t left = c->plan.body.file.len;
-    int64_t now = platform_now_ms();
-    if (now < 0 || position < 0) {
-        return -1;
-    }
-    c->deadline = after_ms(now, stall);
-
-    while (left > 0) {
-        if (wait_socket(c->fd, POLLOUT, c->deadline) < 0) {
+    off_t offset = c->plan.body.file.off;
+    off_t remaining = c->plan.body.file.len;
+    while (remaining > 0) {
+        if (wait_to_send(c) < 0) {
             return -1;
         }
-        off_t before = position;
-        size_t count = left < CONN_IO_CHUNK ? (size_t)left : CONN_IO_CHUNK;
-        ssize_t result = platform_sendfile(c->fd, c->plan.body.file.fd, &position, count);
-        /* sendfile은 실패를 반환할 때도 이미 보낸 바이트만큼 오프셋을 옮길 수 있다. */
-        off_t progress = position - before;
+        off_t previous = offset;
+        size_t count = remaining < CONN_IO_SIZE ? (size_t)remaining : CONN_IO_SIZE;
+        ssize_t n = platform_sendfile(c->fd, c->plan.body.file.fd, &offset, count);
+        int send_error = errno;
+        off_t progress = offset - previous;
         if (progress > 0) {
-            left -= progress;
+            remaining -= progress;
             *sent += (uint64_t)progress;
-            now = platform_now_ms();
-            if (now < 0) {
-                return -1;
-            }
-            c->deadline = after_ms(now, stall);
+            extend_send_deadline(c);
         }
-        if (result == 0 || (result < 0 && !would_wait())) {
+        if (n == 0 || (n < 0 && send_error != EAGAIN && send_error != EWOULDBLOCK)) {
             return -1;
         }
     }
     return 0;
 }
 
-/* 읽기를 마친 클라이언트가 끊어졌는지 확인한다. 다음 요청은 소비하지 않는다. */
-static bool peer_gone(conn_t *c, short events)
+/* 요청 여분은 수신 버퍼에 남겨야 한다. 이미 읽을 바이트가 있으면 HUP/ERR만 감시한다. */
+static struct pollfd watch_client(const conn_t *c)
 {
-    if (events & (POLLERR | POLLNVAL | POLLHUP)) {
+    return (struct pollfd){c->fd, c->peer_has_input ? 0 : POLLIN, 0};
+}
+
+static bool client_disconnected(conn_t *c, short events)
+{
+    if (events & (POLLERR | POLLHUP | POLLNVAL)) {
+        errno = ECONNRESET;
         return true;
     }
     if (events & POLLIN) {
         char byte;
-        ssize_t n = recv(c->fd, &byte, sizeof(byte), MSG_PEEK);
-        if (n > 0) {
-            /* 다음 요청을 그대로 두고, 그 바이트가 poll을 반복해서 깨우지 않게 한다. */
-            c->watch_peer_input = false;
+        ssize_t n = recv(c->fd, &byte, 1, MSG_PEEK);
+        if (n == 0 || (n < 0 && errno != EINTR && !would_block())) {
+            errno = ECONNRESET;
+            return true;
         }
-        return n == 0 || (n < 0 && !would_wait());
+        c->peer_has_input = n > 0;
     }
     return false;
 }
 
-static struct pollfd watch_client(const conn_t *c)
+static void close_cgi_stdin(response_plan_t *plan)
 {
-    return (struct pollfd){.fd = c->fd, .events = c->watch_peer_input ? POLLIN : 0};
-}
-
-static void finish_cgi_input(response_plan_t *plan)
-{
-    /* stdin에 EOF를 알린다. fd를 지워 plan_cleanup에서 다시 닫지 않게 한다. */
     if (plan->body.pipe.in_fd >= 0) {
-        (void)close(plan->body.pipe.in_fd);
+        close(plan->body.pipe.in_fd);
         plan->body.pipe.in_fd = -1;
     }
 }
 
-static int write_cgi_input(response_plan_t *plan)
+static int pump_cgi_stdin(response_plan_t *plan)
 {
     buf_t *input = &plan->body.pipe.in_data;
-    size_t limit = input->len < CONN_IO_CHUNK ? input->len : CONN_IO_CHUNK;
-    ssize_t n = write(plan->body.pipe.in_fd, input->data, limit);
+    size_t size = input->len < CONN_IO_SIZE ? input->len : CONN_IO_SIZE;
+    ssize_t n = write(plan->body.pipe.in_fd, input->data, size);
     if (n > 0) {
         buf_consume(input, (size_t)n);
         if (input->len == 0) {
-            finish_cgi_input(plan);
+            close_cgi_stdin(plan);
         }
     } else if (n < 0 && errno == EPIPE) {
-        finish_cgi_input(plan);
-    } else if (n == 0 || !would_wait()) {
+        close_cgi_stdin(plan);
+    } else if (n == 0 || (errno != EINTR && !would_block())) {
         return -1;
     }
     return 0;
 }
 
-static ssize_t read_cgi_output(conn_t *c, void *out, size_t size)
+static ssize_t read_cgi(conn_t *c, char *data, size_t size)
 {
-    response_plan_t *plan = &c->plan;
-    c->deadline = plan->body.pipe.deadline_ms;
-
-    /* 자식이 stdin을 다 읽기 전에 stdout이 가득 찰 수 있어 두 파이프를 함께 확인한다. */
+    response_plan_t *p = &c->plan;
+    if (p->body.pipe.in_data.len == 0) {
+        close_cgi_stdin(p);
+    }
     for (;;) {
-        struct pollfd fds[] = {watch_client(c),
-                               {.fd = plan->body.pipe.out_fd, .events = POLLIN},
-                               {.fd = plan->body.pipe.in_fd, .events = POLLOUT}};
-        if (poll_until(fds, 3, c->deadline) < 0) {
+        struct pollfd fds[] = {
+            watch_client(c),
+            {p->body.pipe.out_fd, POLLIN, 0},
+            {p->body.pipe.in_fd, POLLOUT, 0},
+        };
+        int64_t deadline = earlier(c->deadline_ms, p->body.pipe.deadline_ms);
+        if (poll_until(fds, 3, deadline) < 0 || client_disconnected(c, fds[0].revents)) {
             return -1;
         }
-        if (peer_gone(c, fds[0].revents)) {
-            errno = ECONNRESET;
-            return -1;
-        }
-        if (fds[2].revents != 0 && write_cgi_input(plan) < 0) {
+        if (fds[2].revents != 0 && pump_cgi_stdin(p) < 0) {
             return -1;
         }
         if (fds[1].revents != 0) {
-            ssize_t n = read(plan->body.pipe.out_fd, out, size);
-            if (n >= 0 || !would_wait()) {
+            ssize_t n = read(p->body.pipe.out_fd, data, size);
+            if (n >= 0 || (errno != EINTR && !would_block())) {
                 return n;
             }
         }
     }
 }
 
-/* 완료 0, 실행 중 1, 비정상 종료 -1. */
-static int check_cgi_exit(response_plan_t *plan)
+static bool cgi_failed(response_plan_t *p)
 {
-    if (plan->body.pipe.pid <= 0) {
-        return 0;
+    if (p->body.pipe.pid <= 0) {
+        return false;
     }
     int status;
-    pid_t child;
+    pid_t waited;
     do {
-        child = waitpid(plan->body.pipe.pid, &status, WNOHANG);
-    } while (child < 0 && errno == EINTR);
-    if (child == 0) {
-        return 1;
+        waited = waitpid(p->body.pipe.pid, &status, WNOHANG);
+    } while (waited < 0 && errno == EINTR);
+    if (waited == 0) {
+        return false;
     }
-    /* 이미 회수된 자식은 계획 정리에서 다시 종료하거나 기다리지 않는다. */
-    if (child > 0 || errno == ECHILD) {
-        plan->body.pipe.pid = 0;
+    if (waited > 0 || errno == ECHILD) {
+        p->body.pipe.pid = 0;
     }
-    return child > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+    return waited < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0;
 }
 
-static int cgi_failure(void)
+static int prepare_cgi(conn_t *c, int client_minor)
 {
-    if (errno == ECONNRESET) {
-        return -1;
-    }
-    return errno == ETIMEDOUT ? 504 : 502;
-}
-
-static int prepare_cgi(conn_t *c, int minor, buf_t *buffered)
-{
-    response_plan_t *plan = &c->plan;
-    if (plan->body.pipe.in_data.len == 0) {
-        finish_cgi_input(plan);
-    }
-    if (platform_set_nonblock(plan->body.pipe.out_fd) < 0 ||
-        (plan->body.pipe.in_fd >= 0 && platform_set_nonblock(plan->body.pipe.in_fd) < 0)) {
-        return 502;
-    }
-    if (!plan->head_pending) {
-        return 0;
+    response_plan_t *p = &c->plan;
+    c->deadline_ms = p->body.pipe.deadline_ms;
+    if (platform_set_nonblock(p->body.pipe.out_fd) < 0 ||
+        (p->body.pipe.in_fd >= 0 && platform_set_nonblock(p->body.pipe.in_fd) < 0) ||
+        buf_init(&c->cgi_output, 0, (size_t)c->env->cfg->cgi_max_head + CONN_IO_SIZE) < 0) {
+        return 500;
     }
 
-    size_t max_head = c->env->cfg->cgi_max_head;
-    if (max_head > SIZE_MAX - CONN_IO_CHUNK ||
-        buf_init(buffered, 0, max_head + CONN_IO_CHUNK) < 0) {
-        return 502;
-    }
-    http_head_out_t head = {0};
+    char data[CONN_IO_SIZE];
     for (;;) {
-        char bytes[CONN_IO_CHUNK];
-        ssize_t n = read_cgi_output(c, bytes, sizeof(bytes));
-        if (n <= 0 || buf_append(buffered, bytes, (size_t)n) < 0) {
-            int status = n < 0 ? cgi_failure() : 502;
-            buf_cleanup(&head.fields);
-            return status;
-        }
-        size_t used;
-        int status;
-        http_parse_result_t parsed =
-            cgi_parse_head(buffered->data, buffered->len, max_head, &head, &used, &status);
-        if (parsed == HTTP_PARSE_DONE && check_cgi_exit(plan) >= 0) {
-            head.close = head.close || plan->head.close;
-            if (head.framing.kind == FRAMING_NONE && head.status >= 200 && head.status != 204 &&
-                head.status != 304) {
-                head.framing.kind = minor == 0 ? FRAMING_CLOSE : FRAMING_CHUNKED;
+        ssize_t n = read_cgi(c, data, sizeof(data));
+        if (n <= 0) {
+            if (n < 0 && errno == ECONNRESET) {
+                return -1;
             }
-            buf_cleanup(&plan->head.fields);
-            plan->head = head;
-            plan->head_pending = false;
-            /* 한 번의 읽기에 딸려 온 본문은 남겨 두고 CGI 헤더만 걷어낸다. */
-            buf_consume(buffered, used);
-            return 0;
+            return n < 0 && errno == ETIMEDOUT ? 504 : 502;
         }
-        if (parsed != HTTP_PARSE_INCOMPLETE || buffered->len >= max_head) {
-            buf_cleanup(&head.fields);
+        if (buf_append(&c->cgi_output, data, (size_t)n) < 0) {
             return 502;
         }
-    }
-}
 
-static int finish_cgi_output(conn_t *c)
-{
-    finish_cgi_input(&c->plan);
-    int64_t deadline = c->plan.body.pipe.deadline_ms;
-    int status;
-    while ((status = check_cgi_exit(&c->plan)) > 0) {
-        int64_t now = platform_now_ms();
-        if (now < 0 || (deadline >= 0 && now >= deadline)) {
-            return -1;
+        size_t used;
+        int status = 502;
+        http_parse_result_t parsed =
+            cgi_parse_head(c->cgi_output.data, c->cgi_output.len, c->env->cfg->cgi_max_head,
+                           &p->head, &used, &status);
+        if (parsed == HTTP_PARSE_ERROR) {
+            return status;
         }
-        struct pollfd peer = watch_client(c);
-        if (poll_until(&peer, 1, earlier(deadline, after_ms(now, 20))) == 0) {
-            if (peer_gone(c, peer.revents)) {
-                return -1;
+        if (parsed == HTTP_PARSE_DONE) {
+            if (cgi_failed(p)) {
+                return 502;
             }
-        } else if (errno != ETIMEDOUT) {
-            return -1;
+            if (platform_now_ms() >= p->body.pipe.deadline_ms) {
+                return 504;
+            }
+            p->head_pending = false;
+            buf_consume(&c->cgi_output, used);
+            if (p->head.framing.kind == FRAMING_NONE) {
+                p->head.framing.kind = client_minor == 1 ? FRAMING_CHUNKED : FRAMING_CLOSE;
+            }
+            return 0;
         }
     }
-    return status;
 }
 
-static int send_cgi(conn_t *c, const buf_t *buffered, uint64_t *sent)
+static int send_pipe(conn_t *c, uint64_t *sent)
 {
     http_framing_t framing = c->plan.head.framing;
-    int64_t deadline = c->plan.body.pipe.deadline_ms;
-    char bytes[CONN_IO_CHUNK];
-    const char *data = buffered->data;
-    size_t size = buffered->len;
-
+    uint64_t remaining = framing.length;
+    char block[CONN_IO_SIZE];
+    const char *data = c->cgi_output.data;
+    size_t size = c->cgi_output.len;
     for (;;) {
-        if (framing.kind == FRAMING_LENGTH && (uint64_t)size > framing.length - *sent) {
-            return -1;
+        if (framing.kind == FRAMING_LENGTH && size > remaining) {
+            size = (size_t)remaining;
         }
-        if (size != 0 && framing.kind == FRAMING_CHUNKED) {
-            buf_reset(&c->output);
-            if (response_write_chunk(data, size, &c->output) < 0 ||
-                send_bytes(c, c->output.data, c->output.len, deadline, NULL) < 0) {
+        if (size != 0) {
+            if (framing.kind == FRAMING_CHUNKED) {
+                buf_reset(&c->output);
+                if (response_write_chunk(data, size, &c->output) < 0 ||
+                    send_bytes(c, c->output.data, c->output.len, NULL) < 0) {
+                    return -1;
+                }
+                *sent += size;
+            } else if (send_bytes(c, data, size, sent) < 0) {
                 return -1;
             }
-            *sent += size;
-        } else if (send_bytes(c, data, size, deadline, sent) < 0) {
-            return -1;
         }
-        ssize_t n = read_cgi_output(c, bytes, sizeof(bytes));
+        if (framing.kind == FRAMING_LENGTH) {
+            remaining -= size;
+            if (remaining == 0) {
+                return 0;
+            }
+        }
+        ssize_t n = read_cgi(c, block, sizeof(block));
         if (n < 0) {
             return -1;
         }
         if (n == 0) {
-            break;
-        }
-        data = bytes;
-        size = (size_t)n;
-    }
-
-    /* 자식의 정상 종료를 확인한다. 길이가 선언된 경우 실제 전송량도 확인한다. */
-    if (finish_cgi_output(c) < 0 || (framing.kind == FRAMING_LENGTH && framing.length != *sent)) {
-        return -1;
-    }
-    if (framing.kind == FRAMING_CHUNKED) {
-        buf_reset(&c->output);
-        if (response_write_last_chunk(&c->output) < 0) {
-            return -1;
-        }
-        return send_bytes(c, c->output.data, c->output.len, deadline, NULL);
-    }
-    return 0;
-}
-
-static int prepare_proxy(conn_t *c, int minor)
-{
-    const config_t *cfg = c->env->cfg;
-    for (;;) {
-        upstream_conn_t *upstream = NULL;
-        http_response_t response;
-        proxy_fail_t reason = PFAIL_BAD_RESPONSE;
-        relay_status_t result = relay_exchange_blocking(
-            &c->job, c->env->lim, cfg->upstream_connect_timeout_ms,
-            cfg->upstream_response_timeout_ms, &upstream, &response, &reason);
-        if (result != RELAY_OK) {
-            if (proxy_on_fail(&c->job, reason, &c->plan) == PROXY_RETRY) {
-                continue;
+            if (framing.kind == FRAMING_LENGTH || cgi_failed(&c->plan)) {
+                return -1;
+            }
+            if (framing.kind == FRAMING_CHUNKED) {
+                buf_reset(&c->output);
+                if (response_write_last_chunk(&c->output) < 0) {
+                    return -1;
+                }
+                return send_bytes(c, c->output.data, c->output.len, NULL);
             }
             return 0;
         }
-
-        /* D-035의 변환 지원 전까지 복합 코딩과 HTTP/1.0에서의 청크 중계는 502로 처리한다. */
-        if (response.framing.kind == FRAMING_CHUNKED) {
-            const http_header_t *coding = http_header_get(&response.headers, "Transfer-Encoding");
-            if (minor == 0 || coding == NULL || !str_eq_ci(coding->value, "chunked") ||
-                http_header_count(&response.headers, "Transfer-Encoding") != 1) {
-                upstream_release(upstream, false);
-                return 502;
-            }
-        }
-
-        if (proxy_on_head(&c->job, upstream, &response, &c->plan) < 0) {
-            return 502;
-        }
-        /* proxy_on_head가 헤더를 사용한 뒤 rbuf에서 본문 시작점까지 소비한다. */
-        c->upstream_reusable = response.keep_alive;
-        buf_consume(&upstream->rbuf, response.head_len);
-        return 0;
+        data = block;
+        size = (size_t)n;
     }
 }
 
-static ssize_t read_upstream(conn_t *c, upstream_conn_t *upstream)
+static int prepare_upstream(conn_t *c, int client_minor)
 {
-    int64_t now = platform_now_ms();
-    if (now < 0) {
-        return -1;
-    }
-    c->deadline = after_ms(now, c->env->cfg->upstream_response_timeout_ms);
     for (;;) {
-        struct pollfd fds[] = {watch_client(c), {.fd = upstream->fd, .events = POLLIN}};
-        if (poll_until(fds, 2, c->deadline) < 0 || peer_gone(c, fds[0].revents)) {
+        upstream_conn_t *up = NULL;
+        http_response_t resp;
+        proxy_fail_t why = PFAIL_CONNECT;
+        const config_t *cfg = c->env->cfg;
+        if (relay_exchange_blocking(&c->job, c->env->lim, cfg->upstream_connect_timeout_ms,
+                                    cfg->upstream_response_timeout_ms, &up, &resp,
+                                    &why) == RELAY_OK) {
+            if (client_minor == 0 && resp.framing.kind == FRAMING_CHUNKED) {
+                upstream_release(up, false);
+                return plan_error(&c->plan, 502);
+            }
+            if (proxy_on_head(&c->job, up, &resp, &c->plan) == 0) {
+                buf_consume(&up->rbuf, resp.head_len);
+                c->upstream_keep_alive = resp.keep_alive;
+            }
+            return 0;
+        }
+        if (proxy_on_fail(&c->job, why, &c->plan) == PROXY_GIVE_UP) {
+            return 0;
+        }
+    }
+}
+
+static ssize_t read_upstream(conn_t *c, int fd, char *data, size_t size)
+{
+    for (;;) {
+        struct pollfd fds[] = {watch_client(c), {fd, POLLIN, 0}};
+        if (poll_until(fds, 2, c->deadline_ms) < 0 || client_disconnected(c, fds[0].revents)) {
             return -1;
         }
         if (fds[1].revents != 0) {
-            ssize_t n = buf_read_fd(&upstream->rbuf, upstream->fd);
-            if (n >= 0 || !would_wait()) {
+            ssize_t n = recv(fd, data, size, 0);
+            if (n >= 0 || (errno != EINTR && !would_block())) {
                 return n;
             }
         }
     }
 }
 
+static void finish_upstream(conn_t *c, bool complete)
+{
+    upstream_release(c->plan.body.upstream.conn, complete && c->upstream_keep_alive);
+    c->plan.body.upstream.conn = NULL;
+}
+
 static int send_upstream(conn_t *c, uint64_t *sent)
 {
-    upstream_conn_t *upstream = c->plan.body.upstream.conn;
+    upstream_conn_t *up = c->plan.body.upstream.conn;
     http_body_tracker_t *tracker = &c->plan.body.upstream.tracker;
-    if (upstream == NULL) {
-        return -1;
-    }
-    buf_t *buffer = &upstream->rbuf;
-
+    char block[CONN_IO_SIZE];
+    const char *data = up->rbuf.data;
+    size_t size = up->rbuf.len;
     for (;;) {
-        size_t used;
-        http_body_result_t tracked = http_body_track(tracker, buffer->data, buffer->len, &used);
-        if (tracked == BODY_ERROR || send_bytes(c, buffer->data, used, -1, sent) < 0) {
+        size_t used = 0;
+        http_body_result_t result = http_body_track(tracker, data, size, &used);
+        if (result == BODY_ERROR || send_bytes(c, data, used, sent) < 0) {
             return -1;
         }
-        /* 응답 경계 뒤에 설명할 수 없는 바이트가 남으면 풀에 재사용 가능한 상태로 넘기지 않는다. */
-        if (tracked == BODY_DONE) {
-            upstream_release(upstream, c->upstream_reusable && used == buffer->len);
-            c->plan.body.upstream.conn = NULL;
+        if (result == BODY_DONE) {
+            finish_upstream(c, used == size);
             return 0;
         }
-        buf_consume(buffer, used);
-        ssize_t n = read_upstream(c, upstream);
-        /* EOF는 연결 종료 방식에서만 정상적인 본문 끝이다. */
+
+        ssize_t n = read_upstream(c, up->fd, block, sizeof(block));
         if (n <= 0) {
-            return n == 0 && tracker->f.kind == FRAMING_CLOSE ? 0 : -1;
+            if (n == 0 && tracker->f.kind == FRAMING_CLOSE) {
+                finish_upstream(c, false);
+                return 0;
+            }
+            return -1;
         }
+        data = block;
+        size = (size_t)n;
     }
 }
 
-static bool body_allowed(http_method_t method, int status)
-{
-    return method != HTTP_HEAD && status >= 200 && status != 204 && status != 304;
-}
-
-static int prepare_response(conn_t *c, const http_request_t *req, int64_t now, buf_t *cgi)
+static int prepare_response(conn_t *c, const http_request_t *req, time_t now)
 {
     const route_t *route = router_match(c->env->router, req->host, req->path);
     if (route == NULL) {
-        return 404;
+        return plan_error(&c->plan, 404);
     }
-
-    handler_ctx_t ctx = {.cfg = c->env->cfg,
-                         .lim = c->env->lim,
-                         .client_ip = str_from_cstr(c->ip),
-                         .server_port = c->port,
-                         .now = platform_wall_time(),
-                         .now_ms = now};
+    handler_ctx_t ctx = {
+        .cfg = c->env->cfg,
+        .lim = c->env->lim,
+        .client_ip = {c->client_ip, strlen(c->client_ip)},
+        .server_port = c->server_port,
+        .now = now,
+        .now_ms = platform_now_ms(),
+    };
     if (handler_dispatch(req, route, &ctx, &c->job, &c->plan) == HANDLER_NEED_UPSTREAM) {
-        int status = prepare_proxy(c, req->minor);
-        if (status != 0) {
-            return status;
-        }
+        return prepare_upstream(c, req->minor);
     }
-    if (c->plan.kind == BODY_PIPE) {
-        int status = prepare_cgi(c, req->minor, cgi);
-        if (status != 0) {
-            return status;
-        }
+    if (c->plan.kind == BODY_PIPE && c->plan.body.pipe.deadline_ms < 0) {
+        c->plan.body.pipe.deadline_ms = after_ms(ctx.now_ms, c->env->cfg->cgi_timeout_ms);
     }
-
-    const http_head_out_t *head = &c->plan.head;
-    if (head->status < 100 || head->status > 599) {
-        return 500;
-    }
-    if (body_allowed(req->method, head->status) && head->framing.kind == FRAMING_CHUNKED &&
-        c->plan.kind != BODY_PIPE && c->plan.kind != BODY_UPSTREAM) {
-        return 500;
-    }
-    if (body_allowed(req->method, head->status) && head->framing.kind == FRAMING_LENGTH) {
-        if ((c->plan.kind == BODY_NONE && head->framing.length != 0) ||
-            (c->plan.kind == BODY_MEM && head->framing.length != c->plan.body.mem.data.len) ||
-            (c->plan.kind == BODY_FILE &&
-             (c->plan.body.file.len < 0 ||
-              head->framing.length != (uint64_t)c->plan.body.file.len))) {
-            return 500;
-        }
-        if (c->plan.kind == BODY_PIPE && (uint64_t)cgi->len > head->framing.length) {
-            return 502;
-        }
+    if (c->plan.kind == BODY_PIPE && c->plan.head_pending) {
+        int status = prepare_cgi(c, req->minor);
+        return status > 0 ? plan_error(&c->plan, status) : status;
     }
     return 0;
 }
 
-static int send_response(conn_t *c, const http_request_t *req, const buf_t *cgi, uint64_t *sent)
+static int send_body(conn_t *c, bool head_request, uint64_t *sent)
 {
-    int64_t hard_deadline = c->plan.kind == BODY_PIPE ? c->plan.body.pipe.deadline_ms : -1;
-    buf_reset(&c->output);
-    if (response_write_head(&c->plan.head, req->minor, platform_wall_time(), &c->output) < 0 ||
-        send_bytes(c, c->output.data, c->output.len, hard_deadline, NULL) < 0) {
-        return -1;
-    }
-
-    /* HEAD는 응답 머리의 길이 정보만 보낸다. 본문 없는 업스트림 연결은 여기서 반납한다. */
-    if (!body_allowed(req->method, c->plan.head.status)) {
-        if (c->plan.kind == BODY_UPSTREAM && c->plan.body.upstream.tracker.f.kind == FRAMING_NONE) {
-            return send_upstream(c, sent);
+    const response_plan_t *p = &c->plan;
+    int status = p->head.status;
+    if (head_request || status < 200 || status == 204 || status == 304) {
+        if (p->kind == BODY_UPSTREAM) {
+            finish_upstream(c, p->body.upstream.tracker.f.kind == FRAMING_NONE &&
+                                   p->body.upstream.conn->rbuf.len == 0);
         }
         return 0;
     }
-
-    switch (c->plan.kind) {
+    switch (p->kind) {
     case BODY_NONE:
         return 0;
     case BODY_MEM:
-        return send_bytes(c, c->plan.body.mem.data.data, c->plan.body.mem.data.len, -1, sent);
+        return send_bytes(c, p->body.mem.data.data, p->body.mem.data.len, sent);
     case BODY_FILE:
         return send_file(c, sent);
     case BODY_PIPE:
-        return send_cgi(c, cgi, sent);
+        return send_pipe(c, sent);
     case BODY_UPSTREAM:
         return send_upstream(c, sent);
     }
     return -1;
 }
 
-static char *copy_for_log(str_t value)
+static void drain_on_close(conn_t *c)
 {
-    if (value.len == 0) {
-        return NULL;
-    }
-    char *copy = malloc(value.len + 1);
-    if (copy != NULL) {
-        memcpy(copy, value.ptr, value.len);
-        copy[value.len] = '\0';
-    }
-    return copy;
-}
-
-static void record_access(const conn_t *c, const http_request_t *req, uint64_t sent, int64_t start)
-{
-    char *method = copy_for_log(req->method_raw);
-    char *target = copy_for_log(req->target);
-    int64_t now = platform_now_ms();
-    log_access(c->ip, method, target, c->plan.head.status, sent, now >= start ? now - start : 0);
-    free(target);
-    free(method);
-}
-
-static void drain_after_error(conn_t *c)
-{
-    /* 오류 응답을 먼저 끝내고 남은 입력을 잠깐 읽어 TCP 리셋으로 응답이 유실되는 일을 줄인다. */
-    int64_t now = platform_now_ms();
-    if (now < 0 || shutdown(c->fd, SHUT_WR) < 0) {
+    if (shutdown(c->fd, SHUT_WR) < 0) {
         return;
     }
-    int64_t deadline = after_ms(now, 1000);
-    char discarded[CONN_IO_CHUNK];
-    while (wait_socket(c->fd, POLLIN, deadline) == 0) {
-        ssize_t n = recv(c->fd, discarded, sizeof(discarded), 0);
-        if (n == 0 || (n < 0 && !would_wait())) {
+    int64_t deadline = after_ms(platform_now_ms(), CONN_DRAIN_MS);
+    char discard[CONN_IO_SIZE];
+    struct pollfd fd = {c->fd, POLLIN, 0};
+    while (poll_until(&fd, 1, deadline) == 0) {
+        ssize_t n = recv(c->fd, discard, sizeof(discard), 0);
+        if (n == 0 || (n < 0 && errno != EINTR && !would_block())) {
+            return;
+        }
+    }
+}
+
+static void finish_request(conn_t *c)
+{
+    proxy_job_cleanup(&c->job);
+    plan_cleanup(&c->plan);
+    plan_init(&c->plan);
+    buf_cleanup(&c->cgi_output);
+    c->upstream_keep_alive = false;
+    c->peer_has_input = false;
+}
+
+static void log_request(conn_t *c, const http_request_t *req, int status, uint64_t sent,
+                        int64_t started)
+{
+    const char *method = NULL;
+    if (req != NULL) {
+        switch (req->method) {
+        case HTTP_GET:
+            method = "GET";
+            break;
+        case HTTP_HEAD:
+            method = "HEAD";
+            break;
+        case HTTP_POST:
+            method = "POST";
+            break;
+        case HTTP_OTHER:
             break;
         }
     }
-}
-
-/* 현재 요청을 끝까지 처리하고 소켓을 더 사용할 수 있는지 돌려준다. */
-static bool serve_request(conn_t *c, int64_t head_deadline, bool last)
-{
-    http_request_t req = {0};
-    buf_t cgi = {0};
-    uint64_t sent = 0;
-    int64_t start = platform_now_ms();
-    if (start < 0) {
-        return false;
-    }
-
-    int status = read_request(c, head_deadline, &req);
-    bool bad_request = status > 0;
-    if (status < 0) {
-        return false;
-    }
-    if (bad_request) {
-        req = (http_request_t){.method = HTTP_OTHER, .minor = 1};
-    } else {
-        c->watch_peer_input = true;
-        c->upstream_reusable = false;
-        status = prepare_response(c, &req, platform_now_ms(), &cgi);
-    }
-
-    bool keep = false;
-    if (status >= 0 && (status == 0 || plan_error(&c->plan, status) == 0)) {
-        http_head_out_t *head = &c->plan.head;
-        /* 연결을 계속 쓸지 헤더를 보내기 전에 정해야 Connection 값과 실제 동작이 맞는다. */
-        head->close =
-            head->close || bad_request || last || !req.keep_alive ||
-            head->framing.kind == FRAMING_CLOSE ||
-            (req.minor == 0 && head->framing.kind == FRAMING_CHUNKED) ||
-            (head->framing.kind == FRAMING_NONE && body_allowed(req.method, head->status));
-        bool sent_all = send_response(c, &req, &cgi, &sent) == 0;
-        record_access(c, &req, sent, start);
-        if (sent_all && bad_request) {
-            drain_after_error(c);
-        }
-        keep = sent_all && !head->close;
-        if (keep) {
-            /* 이번 요청의 머리와 본문만 소비한다. 뒤에 붙은 다음 요청은 남겨 둔다. */
-            buf_consume(&c->input, req.head_len + req.body.len);
+    char *target = NULL;
+    if (req != NULL) {
+        target = malloc(req->target.len + 1);
+        if (target != NULL) {
+            memcpy(target, req->target.ptr, req->target.len);
+            target[req->target.len] = '\0';
         }
     }
-
-    buf_cleanup(&cgi);
-    proxy_job_cleanup(&c->job);
-    plan_cleanup(&c->plan);
-    return keep;
+    log_access(c->client_ip, method, target, status, sent, platform_now_ms() - started);
+    free(target);
 }
 
 void conn_serve_blocking(conn_t *c)
 {
-    if (c->env->nonblocking || c->finished) {
+    if (c->env->nonblocking) {
         return;
     }
 
-    const config_t *cfg = c->env->cfg;
-    int64_t head_deadline = c->deadline;
-    for (uint64_t count = 1;; ++count) {
-        bool last =
-            cfg->max_keepalive_requests > 0 && count >= (uint64_t)cfg->max_keepalive_requests;
-        if (!serve_request(c, head_deadline, last)) {
+    for (;;) {
+        http_request_t req = {0};
+        size_t request_size;
+        int64_t started = platform_now_ms();
+        int parse_error = receive_request(c, &req, &request_size);
+        if (parse_error < 0) {
             break;
         }
-        int64_t now = platform_now_ms();
-        if (now < 0) {
+
+        time_t now = platform_wall_time();
+        int prepared =
+            parse_error ? plan_error(&c->plan, parse_error) : prepare_response(c, &req, now);
+        if (prepared != 0) {
+            finish_request(c);
             break;
         }
-        head_deadline = after_ms(now, cfg->header_timeout_ms);
-        c->deadline = c->input.len == 0 ? after_ms(now, cfg->keepalive_timeout_ms) : head_deadline;
+
+        const config_t *cfg = c->env->cfg;
+        http_head_out_t *head = &c->plan.head;
+        c->requests++;
+        bool close_after = parse_error != 0 || !req.keep_alive || head->close ||
+                           head->framing.kind == FRAMING_CLOSE ||
+                           (req.minor == 0 && head->framing.kind == FRAMING_CHUNKED) ||
+                           (cfg->max_keepalive_requests > 0 &&
+                            c->requests >= (unsigned)cfg->max_keepalive_requests);
+        head->close = close_after;
+        buf_reset(&c->output);
+        extend_send_deadline(c);
+        uint64_t sent = 0;
+        int status = head->status;
+        bool sent_head = response_write_head(head, req.minor, now, &c->output) == 0 &&
+                         send_bytes(c, c->output.data, c->output.len, NULL) == 0;
+        bool sent_all =
+            sent_head && send_body(c, !parse_error && req.method == HTTP_HEAD, &sent) == 0;
+        log_request(c, parse_error ? NULL : &req, status, sent, started);
+        finish_request(c);
+        if (sent_all && parse_error != 0) {
+            drain_on_close(c);
+        }
+        if (!sent_all || close_after) {
+            break;
+        }
+
+        buf_consume(&c->input, request_size);
+        int64_t done = platform_now_ms();
+        c->header_deadline_ms = after_ms(done, cfg->header_timeout_ms);
+        c->idle = c->input.len == 0;
+        c->deadline_ms =
+            c->idle ? after_ms(done, cfg->keepalive_timeout_ms) : c->header_deadline_ms;
     }
-    c->finished = true;
-    c->deadline = -1;
+    c->deadline_ms = -1;
 }
 
 conn_status_t conn_on_event(conn_t *c, int fd, unsigned events, int64_t now_ms)
@@ -851,7 +762,7 @@ conn_status_t conn_on_event(conn_t *c, int fd, unsigned events, int64_t now_ms)
     UNUSED(fd);
     UNUSED(events);
     UNUSED(now_ms);
-    /* TODO(downstream): 선택 7단계 이벤트 경로. */
+    /* 이벤트 경로는 7단계에서 구현한다. */
     STUB_RETURN(CONN_CLOSE);
 }
 
@@ -859,7 +770,7 @@ conn_status_t conn_on_timeout(conn_t *c, int64_t now_ms)
 {
     UNUSED(c);
     UNUSED(now_ms);
-    /* TODO(downstream): 선택 7단계 이벤트 경로. */
+    /* v1의 마감은 blocking 루프에서 처리한다. */
     STUB_RETURN(CONN_CLOSE);
 }
 
@@ -870,5 +781,5 @@ int conn_fd(const conn_t *c)
 
 int64_t conn_deadline_ms(const conn_t *c)
 {
-    return c->deadline;
+    return c->deadline_ms;
 }

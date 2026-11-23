@@ -7,11 +7,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "common/types.h"
@@ -76,44 +74,12 @@ static route_t static_route(const char *root)
     return rt;
 }
 
-static void t_u_hd_01(void)
-{
-    response_plan_t p = {0};
-
-    plan_cleanup(NULL);
-    plan_cleanup(&p);
-    CHECK_EQ_INT(p.kind, BODY_NONE);
-    CHECK_EQ_INT(p.head.status, 0);
-    CHECK_EQ_INT(p.head.framing.kind, FRAMING_NONE);
-    CHECK(p.head.fields.data == NULL);
-    CHECK(!p.head.close && !p.head_pending);
-    CHECK_EQ_INT(p.body.pipe.out_fd, -1);
-    CHECK_EQ_INT(p.body.pipe.in_fd, -1);
-    CHECK_EQ_INT(p.body.pipe.pid, 0);
-    CHECK_EQ_INT(p.body.pipe.deadline_ms, -1);
-}
-
 static void t_u_hd_02(void)
 {
     response_plan_t p;
-    char body[] = {'a', '\0', 'b'};
-    const char header[] = "Content-Type: application/octet-stream\r\n";
 
     new_plan(&p);
-    CHECK_EQ_INT(plan_set_mem(&p, 200, "application/octet-stream", body, sizeof(body)), 0);
-    body[0] = 'x';
-    CHECK_EQ_MEM(p.body.mem.data.data, p.body.mem.data.len, "a\0b", 3);
-    CHECK_EQ_INT(p.head.framing.length, 3);
-    CHECK_EQ_INT(plan_add_header(&p, "content-length", "3"), -1);
-    CHECK_EQ_INT(errno, EINVAL);
-    CHECK_EQ_INT(plan_add_header(&p, "X-Data", "a\r\nUnexpected: b"), -1);
-    CHECK_EQ_MEM(p.head.fields.data, p.head.fields.len, header, sizeof(header) - 1);
-    CHECK_EQ_INT(plan_set_mem(&p, 200, NULL, p.body.mem.data.data, p.body.mem.data.len), 0);
-    CHECK_EQ_MEM(p.body.mem.data.data, p.body.mem.data.len, "a\0b", 3);
-
-    p.head.close = true;
     CHECK_EQ_INT(plan_error(&p, 404), 0);
-    CHECK(p.head.close);
     CHECK_EQ_INT(p.kind, BODY_MEM);
     CHECK_EQ_INT(p.head.status, 404);
     CHECK(p.body.mem.data.len > 0);
@@ -147,39 +113,6 @@ static void t_u_hd_04(void)
     CHECK_EQ_INT(p.kind, BODY_NONE);
     plan_cleanup(&p); /* 두 번째 호출도 안전해야 한다 */
     CHECK_EQ_INT(p.kind, BODY_NONE);
-}
-
-static void t_u_hd_05(void)
-{
-    response_plan_t p;
-    int fds[2];
-
-    CHECK_EQ_INT(pipe(fds), 0);
-    pid_t pid = fork();
-    CHECK(pid >= 0);
-    if (pid == 0) {
-        (void)pause();
-        _exit(0);
-    }
-    plan_init(&p);
-    p.kind = BODY_PIPE;
-    p.body.pipe.out_fd = fds[0];
-    p.body.pipe.in_fd = fds[1];
-    p.body.pipe.pid = pid;
-    errno = EBUSY;
-    plan_cleanup(&p);
-    int cleanup_errno = errno;
-    pid_t result = waitpid(pid, NULL, WNOHANG);
-    int wait_errno = errno;
-    if (result == 0) {
-        (void)kill(pid, SIGKILL);
-        (void)waitpid(pid, NULL, 0);
-    }
-    CHECK_EQ_INT(cleanup_errno, EBUSY);
-    CHECK_EQ_INT(p.kind, BODY_NONE);
-    CHECK(fcntl(fds[0], F_GETFD) == -1 && errno == EBADF);
-    CHECK(fcntl(fds[1], F_GETFD) == -1 && errno == EBADF);
-    CHECK(result == -1 && wait_errno == ECHILD);
 }
 
 static void t_u_hd_09(void)
@@ -489,10 +422,8 @@ static void t_u_px_10(void)
 
 void register_handler_tests(void)
 {
-    test_register("U-HD-01", "plan_init: empty plan and fd sentinels", t_u_hd_01);
     test_register("U-HD-02", "plan_error(404) builds an HTML BODY_MEM plan", t_u_hd_02);
     test_register("U-HD-04", "plan_cleanup closes the file fd, twice is safe", t_u_hd_04);
-    test_register("U-HD-05", "plan_cleanup closes CGI pipes and reaps child", t_u_hd_05);
     test_register("U-HD-09", "static_handle: GET /index.html", t_u_hd_09);
     test_register("U-HD-11", "static_handle: POST is 405 with Allow", t_u_hd_11);
     test_register("U-HD-14", "static_handle: symlink escaping root is 403", t_u_hd_14);

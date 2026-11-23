@@ -268,42 +268,26 @@
 - 대안: 프로젝트 안내를 README 앞에 두고 과제 요구사항을 부록으로 둠 (D-028).
 - 영향: `README.md`.
 
-## D-033 chunked 요청 본문 지원
-- 상태: 제안
-- 날짜: 2026-11-21
-- 맥락: 공통 프레이밍과 추적기는 chunked 경계를 인식하지만 D-003과 요청 파서 계약은 chunked를 501로 처리한다.
-- 결정: 팀 합의 후 요청 프레이밍에 CHUNKED를 허용하고, 연결 모듈이 청크를 디코딩해 body를 채우도록 계약을 갱신한다. 수신 한도는 디코딩된 길이와 청크 메타데이터에 적용하고, 다음 요청을 보존하기 위해 소비할 원본 바이트 수를 별도로 추적한다. 업스트림에 디코딩된 본문을 보낼 때는 실제 길이로 Content-Length를 다시 만든다.
-- 대안: D-003의 501 정책 유지.
-- 영향: `common/types.h`, `downstream/request_parser.h`, `downstream/conn.h`, `upstream/request_writer.h`, U-DS-14, E-ER-09.
-
-## D-034 응답 계획의 활성 union 멤버 초기화
-- 상태: 제안
-- 날짜: 2026-11-21
-- 맥락: plan_init 주석은 fd의 -1과 업스트림 포인터의 NULL을 동시에 요구한다. 두 값은 body union의 같은 저장 공간을 사용한다.
-- 결정: BODY_NONE에서는 body에 접근하지 않고, 처리기가 kind에 맞는 멤버를 통째로 초기화하도록 주석을 명확히 한다.
-- 대안: 본문별 생성 함수 추가.
-- 영향: `common/types.h`, `handler/plan.h`, `handler/static.c`, `handler/cgi.c`, `handler/proxy.c`, U-HD-01.
-
-## D-035 업스트림 전송 코딩 중계
-- 상태: 제안
-- 날짜: 2026-11-21
-- 맥락: 공통 프레이밍은 마지막 코딩이 chunked인 목록의 본문 경계를 추적할 수 있다. 다운스트림 직렬화 계약은 Transfer-Encoding에 chunked만 쓴다.
-- 결정: 중계하는 원본 바이트에 앞선 전송 코딩이 남아 있다면, 변환을 지원하기 전까지 프록시가 해당 응답을 헤더 송신 전에 502로 처리하도록 합의한다. HTTP/1.0으로 chunked 응답을 중계할 때는 청크 프레이밍을 제거한 바이트만 전송한다.
-- 대안: 원래의 전송 코딩 목록을 보존하거나 각 코딩을 해제한 다음 본문을 다시 프레이밍한다.
-- 영향: `handler/handler.h`, `handler/proxy.c`, `downstream/response_writer.h`, E-PX-05, E-PX-16.
-
-## D-036 listener의 원자적 cloexec 설정
+## D-033 Blocking 연결에서 관찰할 수 있는 마감과 종료
 - 상태: 제안
 - 날짜: 2026-11-23
-- 맥락: listener 계약은 Linux에서 accept4를 지정하고 전역 규약은 OS별 API를 core/platform에 둔다. 현재 core에는 accept 래퍼가 없다.
-- 결정: Linux의 원자적 accept를 core/platform에 둘지 합의한다. 현 구현은 POSIX accept 직후 fcntl로 FD_CLOEXEC를 설정한다. 동시에 다른 워커가 fork할 때는 그 사이의 fd 상속을 막기 위해 원자적 accept가 필요하다.
-- 대안: listener에서 Linux 분기를 허용한다.
-- 영향: `core/platform.h`, `downstream/listener.h`, `downstream/listener.c`, U-DS-36, U-DS-38.
+- 맥락: `conn_env_t`에는 서버 종료 플래그가 없고, blocking relay에는 응답 머리를 기다리는 중에 클라이언트의 종료를 전달할 방법이 없다. 응답 송신과 업스트림 본문 수신 정체에 적용할 별도 설정도 없다.
+- 결정: 응답의 송신 및 중계 정체에는 `body_timeout_ms`를 적용하고 클라이언트로 송신할 때마다 갱신한다. CGI의 절대 마감은 별도로 적용한다. CGI 또는 업스트림 본문을 기다리는 중 클라이언트에서 EOF를 읽으면 응답을 중단한다. v1에서 서버 종료와 업스트림 머리 수신 중 연결 취소를 관찰하는 인터페이스는 별도로 논의한다.
+- 대안: 종료 플래그와 relay 취소 인자를 공개 인터페이스에 추가한다.
+- 영향: `downstream/conn.c`, `downstream/conn.h`, `engine/engine.h`, `upstream/relay.h`. E-SL-02, E-SL-04, E-PX-17.
 
-## D-037 v1 송신 정체 및 서버 종료 전달
+## D-034 HTTP/1.0에 업스트림 chunked 응답 전송
 - 상태: 제안
 - 날짜: 2026-11-23
-- 맥락: v1은 대기 상한을 확인해야 하지만 송신 정체 전용 한도와 연결에 서버 종료를 알리는 값이 공개 계약에 없다.
-- 결정: 별도 설정이 합의되기 전까지 다운스트림 송신 정체에 body_timeout_ms를, 업스트림 본문 읽기 정체에 upstream_response_timeout_ms를 적용한다. 서버 종료 여부는 app과 engine의 종료 계약을 먼저 정한다.
-- 대안: 전송별 설정과 연결 종료 통지를 공개 인터페이스에 추가한다.
-- 영향: `downstream/conn.h`, `core/config.h`, `engine/engine.h`, E-SL-02, E-SL-04.
+- 맥락: `proxy_on_head`는 HTTP/1.0에서 chunked 응답을 CLOSE로 표시한다. `http_body_track`이 돌려주는 범위는 청크 프레이밍도 포함하므로 그대로 보내면 클라이언트가 청크 길이와 구분자를 본문으로 읽는다.
+- 결정: 본문 바이트를 따로 추출하는 공용 계약이 생길 때까지 HTTP/1.0의 chunked 업스트림 응답은 머리 송신 전에 502로 처리한다.
+- 대안: 공용 파서가 청크 데이터 범위를 알려 주도록 확장하고 downstream이 데이터만 전송한다.
+- 영향: `downstream/conn.c`, `common/http_framing.h`, `handler/handler.h`.
+
+## D-035 읽기 한도를 넘긴 바이너리 입력 종료
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: E-ER-12는 바이너리 입력에 400 또는 즉시 종료를 허용한다. 테스트 입력에서는 빈 줄보다 머리 한도에 먼저 도달해 공용 머리 탐색의 결과가 431이다.
+- 결정: 431로 판정되더라도 첫 줄에 NUL이 포함된 연결은 응답 없이 종료한다. 요청 파서의 결과와 일반적인 머리 길이 오류의 431 응답은 그대로 적용한다.
+- 대안: E-ER-12에 431도 허용하도록 별도 테스트 PR에서 수정한다.
+- 영향: `downstream/conn.c`, E-ER-12.
