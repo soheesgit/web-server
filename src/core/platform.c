@@ -62,7 +62,9 @@ ssize_t platform_send(int fd, const void *p, size_t n)
         return 0;
     }
     do {
-#if defined(__linux__)
+        /* macOS도 최신 SDK에는 MSG_NOSIGNAL이 있다. 있으면 호출 단위로 SIGPIPE를 막는다.
+         * SO_NOSIGPIPE는 상대가 닫힌 뒤에는 설정이 거부될 수 있어 대체 경로로만 쓴다 */
+#if defined(MSG_NOSIGNAL)
         sent = send(fd, p, n, MSG_NOSIGNAL);
 #else
 #if defined(SO_NOSIGPIPE)
