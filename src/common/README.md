@@ -29,11 +29,12 @@ I/O 금지. 모든 함수는 순수 함수이며 `[thread-safe]`(출력 버퍼 �
 | --- | --- |
 | 현재(기능) | E-ER-06, E-ER-08, E-ER-13, E-ER-14, E-KA-03~05, E-PX-03, E-PX-05 |
 | 현재(계약 최소셋) | U-COM-01, 02, 04, 07, 10, 18, 21, 26, 29, 32, 38, 40 |
+| 추가 계약 테스트 | U-COM-33, 42, 43, 44, 45 |
 | 추후 | U-COM-01~45 중 나머지 |
 
 ## 구현 단계
 1단계 (`core` + `common`). 분담: A `http_headers` · B `http_framing`(본문 길이) · C `http_framing`(경계 추적, keep-alive), `http_status`.
-- [ ] http_headers
-- [ ] http_framing — 본문 길이
-- [ ] http_framing — 경계 추적, keep-alive
-- [ ] http_status
+- [x] http_headers
+- [x] http_framing — 본문 길이
+- [x] http_framing — 경계 추적, keep-alive
+- [x] http_status
