@@ -35,9 +35,13 @@
 
 ## 구현 단계
 2단계. 분담: A `request_parser` · B `uri`, `response_writer` · C `listener`, `conn`(blocking 경로). 7단계(선택) B `conn` 이벤트 경로.
-- [ ] request_parser
-- [ ] uri
-- [ ] response_writer
-- [ ] listener
-- [ ] conn — blocking 경로 (v1)
+- [x] request_parser
+- [x] uri
+- [x] response_writer
+- [x] listener
+- [x] conn — blocking 경로 (v1)
 - [ ] conn — 이벤트 경로 (v2)
+
+Stage 2에서는 `U-DS-01`, `06`, `07`, `12`, `22`, `27`, `28`, `30`, `36`이 통과한다. `U-DS-40`과 `U-DS-44`는 이벤트 경로와 실제 라우터·STATIC 처리기가 필요하다.
+
+v1의 대기 마감은 D-033, HTTP/1.0의 업스트림 응답 정책은 D-034, 머리 한도를 넘긴 바이너리 입력은 D-035를 따른다.
