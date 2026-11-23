@@ -38,10 +38,12 @@
 
 ## 구현 단계
 4단계 (`upstream` + `handler` PROXY). 분담: A `request_writer`, `response_parser` · B `pool`, `lb` · C `backend`, `relay`. 7단계(선택) C `relay` 이벤트 경로.
-- [ ] request_writer
-- [ ] response_parser
-- [ ] backend
-- [ ] lb
-- [ ] pool
-- [ ] relay — blocking (v1)
+- [x] request_writer
+- [x] response_parser
+- [x] backend
+- [x] lb
+- [x] pool
+- [x] relay — blocking (v1)
 - [ ] relay — 상태 머신 (v2)
+
+v1 소스 구현은 반영했다. v2 relay 상태 머신 코드는 있으나 이벤트 엔진·downstream과의 실행 경로 통합은 보류되어 미완료로 표시했다. POSIX 빌드와 테스트는 아직 실행하지 않았다.
