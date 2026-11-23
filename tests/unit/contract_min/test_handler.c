@@ -74,6 +74,23 @@ static route_t static_route(const char *root)
     return rt;
 }
 
+static void t_u_hd_01(void)
+{
+    response_plan_t p = {0};
+
+    plan_cleanup(NULL);
+    plan_cleanup(&p);
+    CHECK_EQ_INT(p.kind, BODY_NONE);
+    CHECK_EQ_INT(p.head.status, 0);
+    CHECK_EQ_INT(p.head.framing.kind, FRAMING_NONE);
+    CHECK(p.head.fields.data == NULL);
+    CHECK(!p.head.close && !p.head_pending);
+    CHECK_EQ_INT(p.body.pipe.out_fd, -1);
+    CHECK_EQ_INT(p.body.pipe.in_fd, -1);
+    CHECK_EQ_INT(p.body.pipe.pid, 0);
+    CHECK_EQ_INT(p.body.pipe.deadline_ms, -1);
+}
+
 static void t_u_hd_02(void)
 {
     response_plan_t p;
@@ -422,6 +439,7 @@ static void t_u_px_10(void)
 
 void register_handler_tests(void)
 {
+    test_register("U-HD-01", "plan_init: empty plan and fd sentinels", t_u_hd_01);
     test_register("U-HD-02", "plan_error(404) builds an HTML BODY_MEM plan", t_u_hd_02);
     test_register("U-HD-04", "plan_cleanup closes the file fd, twice is safe", t_u_hd_04);
     test_register("U-HD-09", "static_handle: GET /index.html", t_u_hd_09);
