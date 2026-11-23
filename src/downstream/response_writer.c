@@ -51,9 +51,9 @@ int response_write_head(const http_head_out_t *head, int client_minor, time_t no
         errno = EINVAL;
         return -1;
     }
-    date_len = snprintf(date, sizeof(date), "%s, %02d %s %04d %02d:%02d:%02d GMT",
-                        weekdays[tm.tm_wday], tm.tm_mday, months[tm.tm_mon], year, tm.tm_hour,
-                        tm.tm_min, tm.tm_sec);
+    date_len =
+        snprintf(date, sizeof(date), "%s, %02d %s %04d %02d:%02d:%02d GMT", weekdays[tm.tm_wday],
+                 tm.tm_mday, months[tm.tm_mon], year, tm.tm_hour, tm.tm_min, tm.tm_sec);
     if (date_len < 0 || (size_t)date_len >= sizeof(date)) {
         errno = EINVAL;
         return -1;
@@ -63,8 +63,8 @@ int response_write_head(const http_head_out_t *head, int client_minor, time_t no
     no_body = status_has_no_body(head->status);
     close = head->close || head->framing.kind == FRAMING_CLOSE ||
             (head->framing.kind == FRAMING_CHUNKED && client_minor == 0);
-    if (buf_appendf(out, "HTTP/1.1 %03d %s\r\nDate: %s\r\nServer: httpd/0.1\r\n",
-                    head->status, http_reason(head->status), date) != 0 ||
+    if (buf_appendf(out, "HTTP/1.1 %03d %s\r\nDate: %s\r\nServer: httpd/0.1\r\n", head->status,
+                    http_reason(head->status), date) != 0 ||
         buf_append(out, head->fields.data, head->fields.len) != 0) {
         out->len = old_len;
         return -1;

@@ -42,8 +42,8 @@ static bool version_parse(str_t v, int *out_minor)
     if (memcmp(v.ptr, prefix, sizeof(prefix) - 1) != 0) {
         return false;
     }
-    if (v.len == 8 && v.ptr[5] >= '0' && v.ptr[5] <= '9' && v.ptr[6] == '.' &&
-        v.ptr[7] >= '0' && v.ptr[7] <= '9') {
+    if (v.len == 8 && v.ptr[5] >= '0' && v.ptr[5] <= '9' && v.ptr[6] == '.' && v.ptr[7] >= '0' &&
+        v.ptr[7] <= '9') {
         if (v.ptr[5] == '1' && (v.ptr[7] == '0' || v.ptr[7] == '1')) {
             *out_minor = (int)(v.ptr[7] - '0');
             return true;
@@ -120,8 +120,7 @@ static bool has_http_request_line(const char *p, size_t len)
     while (second_space < end && p[second_space] != ' ') {
         second_space++;
     }
-    return second_space + 5 <= end &&
-           memcmp(p + second_space + 1, "HTTP/", 5) == 0;
+    return second_space + 5 <= end && memcmp(p + second_space + 1, "HTTP/", 5) == 0;
 }
 
 /* 오류 상태를 out_status에 기록하고 파서 결과 ERROR를 돌려준다. */
@@ -205,8 +204,8 @@ http_parse_result_t request_parse_head(const char *p, size_t len, const http_lim
     while (second_space < line_end && p[second_space] != ' ') {
         second_space++;
     }
-    if (second_space == first_space + 1 || second_space == line_end || second_space + 1 >= line_end ||
-        p[second_space + 1] == ' ') {
+    if (second_space == first_space + 1 || second_space == line_end ||
+        second_space + 1 >= line_end || p[second_space + 1] == ' ') {
         return (http_parse_result_t)request_error(400, out_status);
     }
     for (size_t i = second_space + 1; i < line_end; i++) {
@@ -298,11 +297,13 @@ http_parse_result_t request_parse_head(const char *p, size_t len, const http_lim
         return (http_parse_result_t)request_error(400, out_status);
     }
     headers_len = head_len - headers_start - delimiter_len;
-    if (http_parse_headers(p + headers_start, headers_len, lim->max_headers, &req.headers, &status) != 0) {
+    if (http_parse_headers(p + headers_start, headers_len, lim->max_headers, &req.headers,
+                           &status) != 0) {
         return (http_parse_result_t)request_error(status, out_status);
     }
 
-    /* 7) absolute-form이면 URI authority가 우선이고, origin-form HTTP/1.1은 Host 하나를 요구한다. */
+    /* 7) absolute-form이면 URI authority가 우선이고, origin-form HTTP/1.1은 Host 하나를 요구한다.
+     */
     if (authority.ptr != NULL) {
         req.host = authority;
     } else {

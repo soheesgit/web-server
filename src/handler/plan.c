@@ -18,7 +18,8 @@
 
 void plan_init(response_plan_t *p)
 {
-    if (p == NULL) return;
+    if (p == NULL)
+        return;
     memset(p, 0, sizeof(*p));
     p->kind = BODY_NONE;
     p->body.file.fd = -1;
@@ -31,14 +32,18 @@ void plan_init(response_plan_t *p)
 void plan_cleanup(response_plan_t *p)
 {
     int saved = errno;
-    if (p == NULL) return;
+    if (p == NULL)
+        return;
     if (p->kind == BODY_MEM) {
         buf_cleanup(&p->body.mem.data);
     } else if (p->kind == BODY_FILE) {
-        if (p->body.file.fd >= 0) (void)close(p->body.file.fd);
+        if (p->body.file.fd >= 0)
+            (void)close(p->body.file.fd);
     } else if (p->kind == BODY_PIPE) {
-        if (p->body.pipe.out_fd >= 0) (void)close(p->body.pipe.out_fd);
-        if (p->body.pipe.in_fd >= 0) (void)close(p->body.pipe.in_fd);
+        if (p->body.pipe.out_fd >= 0)
+            (void)close(p->body.pipe.out_fd);
+        if (p->body.pipe.in_fd >= 0)
+            (void)close(p->body.pipe.in_fd);
         buf_cleanup(&p->body.pipe.in_data);
         if (p->body.pipe.pid > 0) {
             int status;
@@ -57,10 +62,13 @@ void plan_cleanup(response_plan_t *p)
 int plan_add_header(response_plan_t *p, const char *name, const char *value)
 {
     static const char *const reserved[] = {"Date", "Server", "Content-Length", "Connection",
-                                            "Transfer-Encoding"};
+                                           "Transfer-Encoding"};
     size_t i, old_len;
     str_t ns;
-    if (p == NULL || name == NULL || value == NULL) { errno = EINVAL; return -1; }
+    if (p == NULL || name == NULL || value == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
     ns = str_from_cstr(name);
     if (!http_token_valid(ns) || strchr(name, '\r') != NULL || strchr(name, '\n') != NULL ||
         strchr(value, '\r') != NULL || strchr(value, '\n') != NULL) {
@@ -68,9 +76,13 @@ int plan_add_header(response_plan_t *p, const char *name, const char *value)
         return -1;
     }
     for (i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++) {
-        if (str_eq_ci(ns, reserved[i])) { errno = EINVAL; return -1; }
+        if (str_eq_ci(ns, reserved[i])) {
+            errno = EINVAL;
+            return -1;
+        }
     }
-    if (p->head.fields.max == 0 && buf_init(&p->head.fields, 256, 64u * 1024u) != 0) return -1;
+    if (p->head.fields.max == 0 && buf_init(&p->head.fields, 256, 64u * 1024u) != 0)
+        return -1;
     old_len = p->head.fields.len;
     if (buf_appendf(&p->head.fields, "%s: %s\r\n", name, value) != 0) {
         p->head.fields.len = old_len;
@@ -110,14 +122,19 @@ int plan_error(response_plan_t *p, int status)
     bool close_after;
     buf_t body = {0};
     int rc;
-    if (p == NULL || status < 400 || status > 599) { errno = EINVAL; return -1; }
+    if (p == NULL || status < 400 || status > 599) {
+        errno = EINVAL;
+        return -1;
+    }
     close_after = p->head.close;
     plan_cleanup(p);
     p->head.close = close_after;
     p->head.status = status;
-    if (buf_init(&body, 128, 4096) != 0) return -1;
+    if (buf_init(&body, 128, 4096) != 0)
+        return -1;
     rc = http_error_body(status, &body);
-    if (rc == 0) rc = plan_set_mem(p, status, "text/html; charset=utf-8", body.data, body.len);
+    if (rc == 0)
+        rc = plan_set_mem(p, status, "text/html; charset=utf-8", body.data, body.len);
     buf_cleanup(&body);
     if (rc != 0) {
         plan_cleanup(p);
@@ -134,14 +151,20 @@ handler_result_t handler_dispatch(const http_request_t *req, const route_t *rt,
                                   response_plan_t *out_plan)
 {
     if (req == NULL || rt == NULL || ctx == NULL || out_plan == NULL) {
-        if (out_plan != NULL) (void)plan_error(out_plan, 500);
+        if (out_plan != NULL)
+            (void)plan_error(out_plan, 500);
         return HANDLER_DONE;
     }
     switch (rt->kind) {
-    case ROUTE_STATIC: return static_handle(req, rt, ctx, out_plan);
-    case ROUTE_CGI: return cgi_handle(req, rt, ctx, out_plan);
+    case ROUTE_STATIC:
+        return static_handle(req, rt, ctx, out_plan);
+    case ROUTE_CGI:
+        return cgi_handle(req, rt, ctx, out_plan);
     case ROUTE_PROXY:
-        if (out_job == NULL) { (void)plan_error(out_plan, 500); return HANDLER_DONE; }
+        if (out_job == NULL) {
+            (void)plan_error(out_plan, 500);
+            return HANDLER_DONE;
+        }
         return proxy_begin(req, rt, ctx, out_job, out_plan);
     }
     (void)plan_error(out_plan, 500);

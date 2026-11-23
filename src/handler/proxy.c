@@ -23,7 +23,8 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
     size_t max_size;
     if (req == NULL || rt == NULL || ctx == NULL || out_job == NULL || out_plan == NULL ||
         rt->upstream == NULL || ctx->cfg == NULL || ctx->lim == NULL) {
-        if (out_plan != NULL) (void)plan_error(out_plan, 500);
+        if (out_plan != NULL)
+            (void)plan_error(out_plan, 500);
         return HANDLER_DONE;
     }
     memset(out_job, 0, sizeof(*out_job));
@@ -55,7 +56,8 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
     rw.strip_prefix = (str_t){NULL, 0};
     if (rt->strip_prefix) {
         size_t n = rt->prefix_len;
-        while (n > 1 && rt->prefix[n - 1] == '/') n--;
+        while (n > 1 && rt->prefix[n - 1] == '/')
+            n--;
         rw.strip_prefix = (str_t){rt->prefix, n};
     }
     if (request_write_upstream(req, &rw, &out_job->request) != 0) {
@@ -71,7 +73,8 @@ proxy_next_t proxy_on_fail(proxy_job_t *job, proxy_fail_t why, response_plan_t *
     int64_t now = platform_now_ms();
     int can_retry = 0, status = 502;
     backend_t *failed;
-    if (job == NULL || out_plan == NULL) return PROXY_GIVE_UP;
+    if (job == NULL || out_plan == NULL)
+        return PROXY_GIVE_UP;
     failed = job->backend;
     upstream_report(failed, false, now);
     if (why == PFAIL_TIMEOUT) {
@@ -116,15 +119,18 @@ int proxy_on_head(proxy_job_t *job, struct upstream_conn *c, const http_response
         framing.kind = FRAMING_CLOSE;
     }
     out_plan->head.framing = framing;
-    if (framing.kind == FRAMING_CLOSE) out_plan->head.close = true;
+    if (framing.kind == FRAMING_CLOSE)
+        out_plan->head.close = true;
     if (out_plan->head.fields.max == 0 && buf_init(&out_plan->head.fields, 256, 64u * 1024u) != 0)
         goto fail;
     for (i = 0; i < resp->headers.n; i++) {
         const http_header_t *h = &resp->headers.v[i];
         if (http_is_hop_by_hop(h->name, &resp->headers) || str_eq_ci(h->name, "Date") ||
-            str_eq_ci(h->name, "Server") || str_eq_ci(h->name, "Content-Length")) continue;
-        if (buf_appendf(&out_plan->head.fields, "%.*s: %.*s\r\n", (int)h->name.len,
-                        h->name.ptr, (int)h->value.len, h->value.ptr) != 0) goto fail;
+            str_eq_ci(h->name, "Server") || str_eq_ci(h->name, "Content-Length"))
+            continue;
+        if (buf_appendf(&out_plan->head.fields, "%.*s: %.*s\r\n", (int)h->name.len, h->name.ptr,
+                        (int)h->value.len, h->value.ptr) != 0)
+            goto fail;
     }
     out_plan->kind = BODY_UPSTREAM;
     out_plan->body.upstream.conn = c;
@@ -141,7 +147,8 @@ fail:
 void proxy_job_cleanup(proxy_job_t *job)
 {
     int saved = errno;
-    if (job == NULL) return;
+    if (job == NULL)
+        return;
     buf_cleanup(&job->request);
     job->group = NULL;
     job->backend = NULL;

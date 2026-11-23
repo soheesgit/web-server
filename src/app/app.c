@@ -56,9 +56,12 @@ static void on_busy(void *ctx, int fd)
     (void)ctx;
     while (sent < sizeof(response) - 1) {
         ssize_t n = platform_send(fd, response + sent, sizeof(response) - 1 - sent);
-        if (n > 0) sent += (size_t)n;
-        else if (n < 0 && errno == EINTR) continue;
-        else break;
+        if (n > 0)
+            sent += (size_t)n;
+        else if (n < 0 && errno == EINTR)
+            continue;
+        else
+            break;
     }
     (void)close(fd);
 }
@@ -75,18 +78,25 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
         .on_busy = on_busy,
     };
     app_t *a;
-    if (cfg == NULL) { errno = EINVAL; return NULL; }
+    if (cfg == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
     a = calloc(1, sizeof(*a));
-    if (a == NULL) return NULL;
+    if (a == NULL)
+        return NULL;
     a->listen_fd = -1;
     a->cfg = *cfg;
     a->limits = (http_limits_t){cfg->max_head, cfg->max_uri, cfg->max_headers, cfg->max_body};
     a->upstreams = upstream_registry_new(&a->cfg, err, errcap);
-    if (a->upstreams == NULL) goto fail;
+    if (a->upstreams == NULL)
+        goto fail;
     a->router = router_new(&a->cfg, upstream_lookup_cb, a->upstreams, err, errcap);
-    if (a->router == NULL) goto fail;
+    if (a->router == NULL)
+        goto fail;
     a->listen_fd = listener_open(a->cfg.listen_host, a->cfg.port, a->cfg.backlog, err, errcap);
-    if (a->listen_fd < 0) goto fail;
+    if (a->listen_fd < 0)
+        goto fail;
     a->conn_env = (conn_env_t){.cfg = &a->cfg,
                                .lim = &a->limits,
                                .router = a->router,
@@ -96,7 +106,8 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
                            cfg->workers, cfg->queue_len, &callbacks, a);
     if (a->engine == NULL) {
         if (err != NULL && errcap > 0 && err[0] == '\0')
-            (void)snprintf(err, errcap, "engine: %s", errno == ENOTSUP ? "event loop is not enabled" : "cannot create");
+            (void)snprintf(err, errcap, "engine: %s",
+                           errno == ENOTSUP ? "event loop is not enabled" : "cannot create");
         goto fail;
     }
     return a;
@@ -107,10 +118,14 @@ fail:
 
 int app_run(app_t *a, volatile sig_atomic_t *stop)
 {
-    if (a == NULL || stop == NULL) { errno = EINVAL; return -1; }
-    log_msg(LOG_INFO, "httpd listening on %s:%u (%s)", a->cfg.listen_host,
-            (unsigned)a->cfg.port, a->cfg.engine == CFG_ENGINE_POOL ? "pool" : "loop");
-    if (engine_run(a->engine, a->listen_fd, stop, a->cfg.shutdown_grace_ms) != 0) return -1;
+    if (a == NULL || stop == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    log_msg(LOG_INFO, "httpd listening on %s:%u (%s)", a->cfg.listen_host, (unsigned)a->cfg.port,
+            a->cfg.engine == CFG_ENGINE_POOL ? "pool" : "loop");
+    if (engine_run(a->engine, a->listen_fd, stop, a->cfg.shutdown_grace_ms) != 0)
+        return -1;
     log_msg(LOG_INFO, "httpd stopped");
     return 0;
 }

@@ -14,7 +14,8 @@ static unsigned char lower_ascii(unsigned char c)
 static int eq_ext(const char *a, const char *b)
 {
     while (*a != '\0' && *b != '\0') {
-        if (lower_ascii((unsigned char)*a) != lower_ascii((unsigned char)*b)) return 0;
+        if (lower_ascii((unsigned char)*a) != lower_ascii((unsigned char)*b))
+            return 0;
         a++;
         b++;
     }
@@ -24,15 +25,22 @@ static int eq_ext(const char *a, const char *b)
 const char *mime_for_path(const char *path)
 {
     const char *slash, *dot, *ext;
-    if (path == NULL) return "application/octet-stream";
+    if (path == NULL)
+        return "application/octet-stream";
     slash = path;
-    for (const char *p = path; *p != '\0'; p++) if (*p == '/') slash = p + 1;
+    for (const char *p = path; *p != '\0'; p++)
+        if (*p == '/')
+            slash = p + 1;
     dot = NULL;
-    for (const char *p = slash; *p != '\0'; p++) if (*p == '.') dot = p;
-    if (dot == NULL || dot == slash) return "application/octet-stream";
+    for (const char *p = slash; *p != '\0'; p++)
+        if (*p == '.')
+            dot = p;
+    if (dot == NULL || dot == slash)
+        return "application/octet-stream";
     ext = dot + 1;
-#define MIME(name, type) \
-    if (eq_ext(ext, name)) return type
+#define MIME(name, type)                                                                           \
+    if (eq_ext(ext, name))                                                                         \
+    return type
     MIME("html", "text/html; charset=utf-8");
     MIME("htm", "text/html; charset=utf-8");
     MIME("css", "text/css; charset=utf-8");

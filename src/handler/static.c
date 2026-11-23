@@ -23,7 +23,8 @@
 static int path_inside_root(const char *root, const char *path)
 {
     size_t n = strlen(root);
-    if (strncmp(root, path, n) != 0) return 0;
+    if (strncmp(root, path, n) != 0)
+        return 0;
     return path[n] == '\0' || path[n] == '/' || (n > 0 && root[n - 1] == '/');
 }
 
@@ -32,16 +33,20 @@ static int make_path(const http_request_t *req, const route_t *rt, char *out, si
     const char *suffix = req->path;
     size_t prefix_len = rt->prefix_len;
     int n;
-    if (strncmp(suffix, rt->prefix, prefix_len) == 0) suffix += prefix_len;
-    while (*suffix == '/') suffix++;
+    if (strncmp(suffix, rt->prefix, prefix_len) == 0)
+        suffix += prefix_len;
+    while (*suffix == '/')
+        suffix++;
     n = snprintf(out, cap, "%s/%s", rt->root, suffix);
     return n >= 0 && (size_t)n < cap ? 0 : -1;
 }
 
 static int map_file_error(int e)
 {
-    if (e == ENOENT || e == ENOTDIR) return 404;
-    if (e == EACCES || e == EPERM || e == ELOOP) return 403;
+    if (e == ENOENT || e == ENOTDIR)
+        return 404;
+    if (e == EACCES || e == EPERM || e == ELOOP)
+        return 403;
     return 500;
 }
 
@@ -49,7 +54,8 @@ static int set_date_header(response_plan_t *plan, time_t when)
 {
     struct tm tmv;
     char date[64];
-    if (gmtime_r(&when, &tmv) == NULL || strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", &tmv) == 0)
+    if (gmtime_r(&when, &tmv) == NULL ||
+        strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", &tmv) == 0)
         return -1;
     return plan_add_header(plan, "Last-Modified", date);
 }
@@ -85,7 +91,8 @@ handler_result_t static_handle(const http_request_t *req, const route_t *rt,
     struct stat st;
     int fd, status;
     if (req == NULL || rt == NULL || ctx == NULL || out_plan == NULL || rt->root == NULL) {
-        if (out_plan != NULL) (void)plan_error(out_plan, 500);
+        if (out_plan != NULL)
+            (void)plan_error(out_plan, 500);
         return HANDLER_DONE;
     }
     if (req->method != HTTP_GET && req->method != HTTP_HEAD) {
@@ -123,7 +130,8 @@ retry_path:
         if (plen == 0 || req->path[plen - 1] != '/') {
             char location[HTTP_PATH_MAX + 2048];
             char query[2048];
-            if (str_to_cstr(req->query, query, sizeof(query)) != 0) query[0] = '\0';
+            if (str_to_cstr(req->query, query, sizeof(query)) != 0)
+                query[0] = '\0';
             (void)close(fd);
             status = snprintf(location, sizeof(location), "%s/%s%s%s", req->path,
                               query[0] == '\0' ? "" : "?", query[0] == '\0' ? "" : query, "");

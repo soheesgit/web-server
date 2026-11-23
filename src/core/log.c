@@ -151,8 +151,8 @@ void log_access(const char *client_ip, const char *method, const char *target, i
             line[pos++] = (char)t[i];
         }
     }
-    head = snprintf(line + pos, cap - pos, "\" %d %llu %lldms\n", status,
-                    (unsigned long long)bytes, (long long)elapsed_ms);
+    head = snprintf(line + pos, cap - pos, "\" %d %llu %lldms\n", status, (unsigned long long)bytes,
+                    (long long)elapsed_ms);
     if (head >= 0 && (size_t)head < cap - pos) {
         pos += (size_t)head;
         pthread_mutex_lock(&log_lock);
