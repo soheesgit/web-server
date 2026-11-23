@@ -236,8 +236,21 @@ bool http_token_valid(str_t s)
             continue;
         }
         switch (c) {
-        case '!': case '#': case '$': case '%': case '&': case '\'': case '*': case '+':
-        case '-': case '.': case '^': case '_': case '`': case '|': case '~':
+        case '!':
+        case '#':
+        case '$':
+        case '%':
+        case '&':
+        case '\'':
+        case '*':
+        case '+':
+        case '-':
+        case '.':
+        case '^':
+        case '_':
+        case '`':
+        case '|':
+        case '~':
             break;
         default:
             return false;
@@ -249,9 +262,15 @@ bool http_token_valid(str_t s)
 /* 역할: 고정 목록과 Connection 목록을 확인해 전달에서 뺄 hop-by-hop 헤더인지 판정한다. */
 bool http_is_hop_by_hop(str_t name, const http_headers_t *h)
 {
-    static const char *const fixed[] = {"Connection", "Keep-Alive", "Proxy-Connection", "TE",
-                                        "Trailer", "Transfer-Encoding", "Upgrade",
-                                        "Proxy-Authenticate", "Proxy-Authorization"};
+    static const char *const fixed[] = {"Connection",
+                                        "Keep-Alive",
+                                        "Proxy-Connection",
+                                        "TE",
+                                        "Trailer",
+                                        "Transfer-Encoding",
+                                        "Upgrade",
+                                        "Proxy-Authenticate",
+                                        "Proxy-Authorization"};
     /* 프로토콜에서 항상 hop-by-hop인 고정 이름을 먼저 확인한다. */
     for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
         if (str_eq_ci_lit(name, fixed[i])) {
@@ -306,8 +325,7 @@ int http_headers_write(const http_headers_t *h, bool skip_hop_by_hop, buf_t *out
         if (skip_hop_by_hop && http_is_hop_by_hop(item->name, h)) {
             continue;
         }
-        if (buf_append(out, item->name.ptr, item->name.len) != 0 ||
-            buf_append(out, ": ", 2) != 0 ||
+        if (buf_append(out, item->name.ptr, item->name.len) != 0 || buf_append(out, ": ", 2) != 0 ||
             buf_append(out, item->value.ptr, item->value.len) != 0 ||
             buf_append(out, "\r\n", 2) != 0) {
             out->len = old_len;
