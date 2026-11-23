@@ -157,6 +157,7 @@ handler_result_t cgi_handle(const http_request_t *req, const route_t *rt, const 
 {
     char relative[HTTP_PATH_MAX], script_name[HTTP_PATH_MAX], path_info[HTTP_PATH_MAX];
     char candidate[PATH_MAX], canonical_root[PATH_MAX], canonical_script[PATH_MAX];
+    char script_dir[PATH_MAX];
     char **child_env = NULL;
     size_t env_count = 0, rel_len, first_len;
     const char *suffix;
@@ -233,6 +234,16 @@ handler_result_t cgi_handle(const http_request_t *req, const route_t *rt, const 
         (void)plan_error(out_plan, 500);
         return HANDLER_DONE;
     }
+    /* 자식의 작업 디렉터리는 fork 전에 만든다. 스레드 풀에서 fork한 자식은 다른 스레드가 잡고 있던
+     * 잠금을 물려받을 수 있어, exec 전에는 async-signal-safe 함수만 부른다. */
+    (void)snprintf(script_dir, sizeof(script_dir), "%s", canonical_script);
+    {
+        char *slash = strrchr(script_dir, '/');
+        if (slash == NULL)
+            script_dir[0] = '\0';
+        else
+            slash[slash == script_dir ? 1 : 0] = '\0';
+    }
     if (pipe(to_child) != 0 || pipe(from_child) != 0 || platform_set_cloexec(to_child[0]) != 0 ||
         platform_set_cloexec(to_child[1]) != 0 || platform_set_cloexec(from_child[0]) != 0 ||
         platform_set_cloexec(from_child[1]) != 0)
@@ -242,27 +253,14 @@ handler_result_t cgi_handle(const http_request_t *req, const route_t *rt, const 
         goto fail;
     if (pid == 0) {
         char *args[2];
-        char dir[PATH_MAX];
-        char *slash;
         (void)close(to_child[1]);
         (void)close(from_child[0]);
         if (dup2(to_child[0], STDIN_FILENO) < 0 || dup2(from_child[1], STDOUT_FILENO) < 0)
             _exit(127);
         (void)close(to_child[0]);
         (void)close(from_child[1]);
-        (void)snprintf(dir, sizeof(dir), "%s", canonical_script);
-        slash = strrchr(dir, '/');
-        if (slash != NULL) {
-            if (slash == dir) {
-                slash[1] = '\0';
-            } else {
-                *slash = '\0';
-            }
-
-            if (chdir(dir) != 0) {
-                _exit(127);
-            }
-        }
+        if (script_dir[0] != '\0' && chdir(script_dir) != 0)
+            _exit(127);
         args[0] = canonical_script;
         args[1] = NULL;
         execve(canonical_script, args, child_env);
