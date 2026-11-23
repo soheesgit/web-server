@@ -206,6 +206,10 @@ int path_normalize(char *path)
             while (write_pos > 1 && path[write_pos - 1] != '/') {
                 write_pos--;
             }
+            /* 구분자까지 지워야 다음 ".."가 그 앞 세그먼트를 지운다 ("/a/b/../.." → "/"). */
+            if (write_pos > 1) {
+                write_pos--;
+            }
             if (read_pos == len) {
                 trailing = true;
             }
@@ -218,10 +222,8 @@ int path_normalize(char *path)
         memmove(path + write_pos, path + start, seg_len);
         write_pos += seg_len;
     }
-    if (trailing && write_pos > 1 && path[write_pos - 1] != '/') {
+    if (trailing && write_pos > 1) {
         path[write_pos++] = '/';
-    } else if (!trailing && write_pos > 1 && path[write_pos - 1] == '/') {
-        write_pos--;
     }
     path[write_pos] = '\0';
     return 0;

@@ -122,6 +122,8 @@ static void t_u_ds_27(void)
     char a[] = "/a/./b//c/";
     char b[] = "/a/b/../c";
     char c[] = "/";
+    char d[] = "/a/b/../../c"; /* 연속 ".."는 세그먼트를 하나씩 지운다 */
+    char e[] = "/a/b/..";
 
     CHECK_EQ_INT(path_normalize(a), 0);
     CHECK_EQ_STR(a, "/a/b/c/");
@@ -129,6 +131,10 @@ static void t_u_ds_27(void)
     CHECK_EQ_STR(b, "/a/c");
     CHECK_EQ_INT(path_normalize(c), 0);
     CHECK_EQ_STR(c, "/");
+    CHECK_EQ_INT(path_normalize(d), 0);
+    CHECK_EQ_STR(d, "/c");
+    CHECK_EQ_INT(path_normalize(e), 0);
+    CHECK_EQ_STR(e, "/a/");
 }
 
 static void t_u_ds_28(void)
@@ -136,11 +142,13 @@ static void t_u_ds_28(void)
     char ok[] = "/a/b/../c";
     char up1[] = "/..";
     char up2[] = "/a/../../b";
+    char up3[] = "/a/b/../../../c";
 
     CHECK_EQ_INT(path_normalize(ok), 0); /* 정상 대조 (D-017) */
     CHECK_EQ_STR(ok, "/a/c");
     CHECK_EQ_INT(path_normalize(up1), -1);
     CHECK_EQ_INT(path_normalize(up2), -1);
+    CHECK_EQ_INT(path_normalize(up3), -1);
 }
 
 static void t_u_ds_30(void)
