@@ -283,3 +283,11 @@
 - 결정: 주석 한 줄 추가만 허용한다. 선언, 필드, 열거값, 함수 시그니처는 바꾸지 않는다.
 - 대안: 각 디렉토리 README에만 설명을 둔다.
 - 영향: `src/common/types.h`, `src/downstream/conn.h` (주석만). 컴파일 결과와 테스트 ID 영향 없음.
+
+## D-038 upstream 내부 상태는 `internal_state.h`에 둔다
+- 상태: 제안
+- 날짜: 2026-11-23
+- 맥락: `backend.c`, `lb.c`, `pool.c`가 `struct backend`, `struct upstream_group`, 유휴 연결 목록을 함께 쓴다. 공개 헤더 `upstream.h`는 이 구조체를 불투명 타입으로만 선언한다.
+- 결정: 공유 정의를 `src/upstream/internal_state.h`에 두고 upstream 디렉토리 안의 .c에서만 include한다. 공개 헤더는 바꾸지 않는다.
+- 대안: 정의를 `upstream.h`에 공개 (다른 디렉토리가 내부 필드에 의존하게 됨), 세 파일을 하나로 합침.
+- 영향: `src/upstream/internal_state.h` (새 파일), `backend.c`, `lb.c`, `pool.c`.
