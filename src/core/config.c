@@ -24,8 +24,7 @@ void config_defaults(config_t *out_cfg)
 
     memset(out_cfg, 0, sizeof(*out_cfg));
 
-    (void)snprintf(out_cfg->listen_host, sizeof(out_cfg->listen_host),
-                   "%s", "0.0.0.0");
+    (void)snprintf(out_cfg->listen_host, sizeof(out_cfg->listen_host), "%s", "0.0.0.0");
     (void)snprintf(out_cfg->root, sizeof(out_cfg->root), "%s", "./www");
 
     out_cfg->port = 8080;
@@ -144,8 +143,8 @@ static int valid_name(const char *s)
     }
     for (i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '-')) {
             return 0;
         }
     }
@@ -167,7 +166,11 @@ static int parse_knob(config_t *cfg, const char *key, const char *value)
     if (parse_uint(value, max, &n) != 0 || n == 0) {
         return -1;
     }
-#define SET_INT(k, field) if (strcmp(key, (k)) == 0) { cfg->field = (int)n; return 0; }
+#define SET_INT(k, field)                                                                          \
+    if (strcmp(key, (k)) == 0) {                                                                   \
+        cfg->field = (int)n;                                                                       \
+        return 0;                                                                                  \
+    }
     SET_INT("backlog", backlog)
     SET_INT("workers", workers)
     SET_INT("queue_len", queue_len)
@@ -183,12 +186,18 @@ static int parse_knob(config_t *cfg, const char *key, const char *value)
     SET_INT("pool_max_idle", pool_max_idle)
     SET_INT("shutdown_grace_ms", shutdown_grace_ms)
 #undef SET_INT
-    if (strcmp(key, "max_head") == 0) cfg->max_head = (size_t)n;
-    else if (strcmp(key, "max_uri") == 0) cfg->max_uri = (size_t)n;
-    else if (strcmp(key, "max_headers") == 0) cfg->max_headers = (size_t)n;
-    else if (strcmp(key, "max_body") == 0) cfg->max_body = n;
-    else if (strcmp(key, "cgi_max_head") == 0) cfg->cgi_max_head = (size_t)n;
-    else return -1;
+    if (strcmp(key, "max_head") == 0)
+        cfg->max_head = (size_t)n;
+    else if (strcmp(key, "max_uri") == 0)
+        cfg->max_uri = (size_t)n;
+    else if (strcmp(key, "max_headers") == 0)
+        cfg->max_headers = (size_t)n;
+    else if (strcmp(key, "max_body") == 0)
+        cfg->max_body = n;
+    else if (strcmp(key, "cgi_max_head") == 0)
+        cfg->cgi_max_head = (size_t)n;
+    else
+        return -1;
     return 0;
 }
 
@@ -220,13 +229,16 @@ static int parse_route(config_t *cfg, char **v, size_t n, size_t start, const ch
             return -1;
         }
         r.kind = ROUTE_PROXY;
-        if (!valid_name(v[start + 2]) || copy_value(r.upstream, sizeof(r.upstream), v[start + 2]) != 0) {
+        if (!valid_name(v[start + 2]) ||
+            copy_value(r.upstream, sizeof(r.upstream), v[start + 2]) != 0) {
             errno = EINVAL;
             return -1;
         }
         for (i = start + 3; i < n; i++) {
-            if (strcmp(v[i], "strip") == 0 && !r.strip_prefix) r.strip_prefix = true;
-            else if (strcmp(v[i], "keep_host") == 0 && !r.keep_host) r.keep_host = true;
+            if (strcmp(v[i], "strip") == 0 && !r.strip_prefix)
+                r.strip_prefix = true;
+            else if (strcmp(v[i], "keep_host") == 0 && !r.keep_host)
+                r.keep_host = true;
             else {
                 errno = EINVAL;
                 return -1;
@@ -246,41 +258,63 @@ static int parse_route(config_t *cfg, char **v, size_t n, size_t start, const ch
 
 static int parse_line(config_t *cfg, char **v, size_t n)
 {
-    if (n == 0) return 0;
-    if (strcmp(v[0], "listen") == 0 && n == 2) return parse_listen(cfg, v[1]);
-    if (strcmp(v[0], "root") == 0 && n == 2) return copy_value(cfg->root, sizeof(cfg->root), v[1]);
+    if (n == 0)
+        return 0;
+    if (strcmp(v[0], "listen") == 0 && n == 2)
+        return parse_listen(cfg, v[1]);
+    if (strcmp(v[0], "root") == 0 && n == 2)
+        return copy_value(cfg->root, sizeof(cfg->root), v[1]);
     if (strcmp(v[0], "engine") == 0 && n == 2) {
-        if (strcmp(v[1], "pool") == 0) cfg->engine = CFG_ENGINE_POOL;
-        else if (strcmp(v[1], "loop") == 0) cfg->engine = CFG_ENGINE_LOOP;
-        else { errno = EINVAL; return -1; }
+        if (strcmp(v[1], "pool") == 0)
+            cfg->engine = CFG_ENGINE_POOL;
+        else if (strcmp(v[1], "loop") == 0)
+            cfg->engine = CFG_ENGINE_LOOP;
+        else {
+            errno = EINVAL;
+            return -1;
+        }
         return 0;
     }
     if (strcmp(v[0], "upstream") == 0 && n >= 3) {
         upstream_conf_t *u;
         size_t i;
-        if (!valid_name(v[1]) || cfg->n_upstreams >= CFG_MAX_UPSTREAMS) { errno = EINVAL; return -1; }
+        if (!valid_name(v[1]) || cfg->n_upstreams >= CFG_MAX_UPSTREAMS) {
+            errno = EINVAL;
+            return -1;
+        }
         for (i = 0; i < cfg->n_upstreams; i++) {
-            if (strcmp(cfg->upstreams[i].name, v[1]) == 0) { errno = EEXIST; return -1; }
+            if (strcmp(cfg->upstreams[i].name, v[1]) == 0) {
+                errno = EEXIST;
+                return -1;
+            }
         }
         u = &cfg->upstreams[cfg->n_upstreams];
-        if (copy_value(u->name, sizeof(u->name), v[1]) != 0) return -1;
-        if (n - 2 > CFG_MAX_BACKENDS) { errno = E2BIG; return -1; }
+        if (copy_value(u->name, sizeof(u->name), v[1]) != 0)
+            return -1;
+        if (n - 2 > CFG_MAX_BACKENDS) {
+            errno = E2BIG;
+            return -1;
+        }
         for (i = 2; i < n; i++) {
-            if (parse_hostport(v[i], &u->backends[i - 2]) != 0) return -1;
+            if (parse_hostport(v[i], &u->backends[i - 2]) != 0)
+                return -1;
         }
         u->n_backends = n - 2;
         cfg->n_upstreams++;
         return 0;
     }
-    if (strcmp(v[0], "route") == 0 && n >= 4) return parse_route(cfg, v, n, 1, NULL);
+    if (strcmp(v[0], "route") == 0 && n >= 4)
+        return parse_route(cfg, v, n, 1, NULL);
     if (strcmp(v[0], "host") == 0 && n >= 5 && strcmp(v[2], "route") == 0)
         return parse_route(cfg, v, n, 3, v[1]);
     if ((strcmp(v[0], "access_log") == 0 || strcmp(v[0], "error_log") == 0) && n == 2)
         return copy_value(strcmp(v[0], "access_log") == 0 ? cfg->access_log : cfg->error_log,
                           CFG_PATH_MAX, v[1]);
     if (n == 2) {
-        if (parse_knob(cfg, v[0], v[1]) == 0) return 0;
-        if (errno == EINVAL || errno == ERANGE) return -1;
+        if (parse_knob(cfg, v[0], v[1]) == 0)
+            return 0;
+        if (errno == EINVAL || errno == ERANGE)
+            return -1;
     }
     errno = EINVAL;
     return -1;
@@ -294,35 +328,48 @@ static int read_config(config_t *cfg, const char *path, char *err, size_t errcap
     ssize_t got;
     size_t lineno = 0;
     int result = 0;
-    if (f == NULL) return -1;
+    if (f == NULL)
+        return -1;
     while ((got = getline(&line, &cap, f)) >= 0) {
         char *v[CFG_MAX_BACKENDS + 8];
         size_t n = 0;
         char *p, *hash;
         lineno++;
-        if ((size_t)got > 0 && line[got - 1] == '\n') line[--got] = '\0';
-        if (got > 0 && line[got - 1] == '\r') line[--got] = '\0';
+        if ((size_t)got > 0 && line[got - 1] == '\n')
+            line[--got] = '\0';
+        if (got > 0 && line[got - 1] == '\r')
+            line[--got] = '\0';
         hash = strchr(line, '#');
-        if (hash != NULL) *hash = '\0';
+        if (hash != NULL)
+            *hash = '\0';
         p = line;
         while (*p != '\0') {
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '\0') break;
-            if (n == sizeof(v) / sizeof(v[0])) { errno = E2BIG; break; }
+            while (*p == ' ' || *p == '\t')
+                p++;
+            if (*p == '\0')
+                break;
+            if (n == sizeof(v) / sizeof(v[0])) {
+                errno = E2BIG;
+                break;
+            }
             v[n++] = p;
-            while (*p != '\0' && *p != ' ' && *p != '\t') p++;
-            if (*p != '\0') *p++ = '\0';
+            while (*p != '\0' && *p != ' ' && *p != '\t')
+                p++;
+            if (*p != '\0')
+                *p++ = '\0';
         }
         if (n > 0 && parse_line(cfg, v, n) != 0) {
             char detail[160];
             (void)snprintf(detail, sizeof(detail), "%s", v[0]);
-            if (err != NULL && errcap > 0) (void)snprintf(err, errcap, "%s:%zu: invalid directive '%s'", path, lineno, detail);
+            if (err != NULL && errcap > 0)
+                (void)snprintf(err, errcap, "%s:%zu: invalid directive '%s'", path, lineno, detail);
             errno = EINVAL;
             result = -1;
             break;
         }
     }
-    if (ferror(f) && result == 0) result = -1;
+    if (ferror(f) && result == 0)
+        result = -1;
     free(line);
     (void)fclose(f);
     return result;
@@ -347,7 +394,8 @@ static int validate_config(config_t *cfg, char *err, size_t errcap)
             }
         } else {
             for (j = 0; j < cfg->n_upstreams; j++) {
-                if (strcmp(r->upstream, cfg->upstreams[j].name) == 0) break;
+                if (strcmp(r->upstream, cfg->upstreams[j].name) == 0)
+                    break;
             }
             if (j == cfg->n_upstreams) {
                 set_error(err, errcap, "route: undefined upstream: %s", r->upstream, NULL);
@@ -370,23 +418,48 @@ static int apply_cli(config_t *cfg, int argc, char **argv, char *err, size_t err
     for (i = 1; i < argc; i++) {
         uint64_t n;
         const char *arg = argv[i];
-        if (strcmp(arg, "-c") == 0) { i++; continue; }
+        if (strcmp(arg, "-c") == 0) {
+            i++;
+            continue;
+        }
         if (strcmp(arg, "-p") == 0 || strcmp(arg, "-r") == 0 || strcmp(arg, "-w") == 0 ||
             strcmp(arg, "-e") == 0) {
             const char *val;
-            if (i + 1 >= argc) { set_error(err, errcap, "%s: missing value", arg, NULL); errno = EINVAL; return -1; }
+            if (i + 1 >= argc) {
+                set_error(err, errcap, "%s: missing value", arg, NULL);
+                errno = EINVAL;
+                return -1;
+            }
             val = argv[++i];
             if (strcmp(arg, "-p") == 0) {
-                if (parse_port(val, &cfg->port) != 0) { set_error(err, errcap, "-p: invalid port '%s'", val, NULL); errno = EINVAL; return -1; }
+                if (parse_port(val, &cfg->port) != 0) {
+                    set_error(err, errcap, "-p: invalid port '%s'", val, NULL);
+                    errno = EINVAL;
+                    return -1;
+                }
             } else if (strcmp(arg, "-r") == 0) {
-                if (copy_value(cfg->root, sizeof(cfg->root), val) != 0) { set_error(err, errcap, "-r: invalid root '%s'", val, NULL); errno = EINVAL; return -1; }
+                if (copy_value(cfg->root, sizeof(cfg->root), val) != 0) {
+                    set_error(err, errcap, "-r: invalid root '%s'", val, NULL);
+                    errno = EINVAL;
+                    return -1;
+                }
             } else if (strcmp(arg, "-w") == 0) {
-                if (parse_uint(val, 1024, &n) != 0 || n == 0) { set_error(err, errcap, "-w: invalid workers '%s'", val, NULL); errno = EINVAL; return -1; }
+                if (parse_uint(val, 1024, &n) != 0 || n == 0) {
+                    set_error(err, errcap, "-w: invalid workers '%s'", val, NULL);
+                    errno = EINVAL;
+                    return -1;
+                }
                 cfg->workers = (int)n;
             } else {
-                if (strcmp(val, "pool") == 0) cfg->engine = CFG_ENGINE_POOL;
-                else if (strcmp(val, "loop") == 0) cfg->engine = CFG_ENGINE_LOOP;
-                else { set_error(err, errcap, "-e: invalid engine '%s'", val, NULL); errno = EINVAL; return -1; }
+                if (strcmp(val, "pool") == 0)
+                    cfg->engine = CFG_ENGINE_POOL;
+                else if (strcmp(val, "loop") == 0)
+                    cfg->engine = CFG_ENGINE_LOOP;
+                else {
+                    set_error(err, errcap, "-e: invalid engine '%s'", val, NULL);
+                    errno = EINVAL;
+                    return -1;
+                }
             }
         } else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
             continue;
@@ -404,26 +477,39 @@ int config_load(int argc, char **argv, config_t *out_cfg, char *err, size_t errc
     const char *config_path = NULL;
     int i;
     config_t cfg;
-    if (out_cfg == NULL || argv == NULL || argc < 1) { errno = EINVAL; return -1; }
-    if (err != NULL && errcap > 0) err[0] = '\0';
+    if (out_cfg == NULL || argv == NULL || argc < 1) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (err != NULL && errcap > 0)
+        err[0] = '\0';
     for (i = 1; i < argc; i++) {
-        if (argv[i] != NULL && (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)) return 1;
+        if (argv[i] != NULL && (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0))
+            return 1;
         if (argv[i] != NULL && strcmp(argv[i], "-c") == 0) {
-            if (i + 1 >= argc) { set_error(err, errcap, "-c: missing file", NULL, NULL); errno = EINVAL; return -1; }
+            if (i + 1 >= argc) {
+                set_error(err, errcap, "-c: missing file", NULL, NULL);
+                errno = EINVAL;
+                return -1;
+            }
             config_path = argv[++i];
         }
     }
     config_defaults(&cfg);
-    if (config_path != NULL && read_config(&cfg, config_path, err, errcap) != 0) return -1;
-    if (apply_cli(&cfg, argc, argv, err, errcap) != 0) return -1;
-    if (validate_config(&cfg, err, errcap) != 0) return -1;
+    if (config_path != NULL && read_config(&cfg, config_path, err, errcap) != 0)
+        return -1;
+    if (apply_cli(&cfg, argc, argv, err, errcap) != 0)
+        return -1;
+    if (validate_config(&cfg, err, errcap) != 0)
+        return -1;
     *out_cfg = cfg;
     return 0;
 }
 
 void config_print_usage(const char *prog)
 {
-    if (prog == NULL) prog = "httpd";
+    if (prog == NULL)
+        prog = "httpd";
     printf("Usage: %s [-p port] [-r root] [-c file] [-w workers] [-e pool|loop] [-h]\n", prog);
     printf("  -p <port>     listen port (1-65535, default 8080)\n");
     printf("  -r <root>     static file root directory (default ./www)\n");
