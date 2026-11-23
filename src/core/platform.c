@@ -113,6 +113,9 @@ static ssize_t sendfile_fallback(int out_fd, int in_fd, off_t *inout_off, size_t
 
 ssize_t platform_sendfile(int out_fd, int in_fd, off_t *inout_off, size_t count)
 {
+    if (count == 0) {
+        return 0;
+    }
 #if defined(__linux__)
     /* sendfile에는 MSG_NOSIGNAL이 없다. 이 스레드에서 SIGPIPE를 잠시 막고, 호출이 만든
      * SIGPIPE는 sigtimedwait로 거둬 프로세스에 전달되지 않게 한다 */

@@ -1,178 +1,171 @@
-/* src/core/log.c
- *
- * 접근·에러 로그. 명세: log.h
- *
- * 한 줄을 스택 버퍼에 다 만든 뒤 write 한 번으로 쓴다(O_APPEND라 줄이 섞이지 않는다).
- * fd 전역은 log_open·log_close(main-only)만 바꾸고, 워커 스레드는 읽기만 한다.
- */
+/* 접근 로그와 에러 로그를 완성된 한 줄 단위로 기록한다. */
 #include "core/log.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
+#include <pthread.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 
+#include "core/buf.h"
 #include "core/platform.h"
 
-#define LOG_LINE_MAX 4096
-#define LOG_TS_LEN 20 /* "2023-11-14T22:13:20Z" */
+static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
+static int access_fd = -1;
+static int error_fd = -1;
+static log_level_t minimum = LOG_DEBUG;
 
-static int g_access_fd = -1; /* -1이면 stderr */
-static int g_error_fd = -1;  /* -1이면 stderr */
-static log_level_t g_min = LOG_DEBUG;
-
-static int fd_or_stderr(int fd)
+/* -1은 외부에서 소유하는 stderr를 사용한다는 뜻이다. */
+static int open_log(const char *path, int *out_fd)
 {
-    return fd >= 0 ? fd : STDERR_FILENO;
+    *out_fd = -1;
+    if (path == NULL || path[0] == '\0') {
+        return 0;
+    }
+    *out_fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+    return *out_fd < 0 ? -1 : 0;
 }
 
-/* ISO 8601 UTC 시각을 out에 쓴다 (NUL 포함 LOG_TS_LEN+1바이트 필요). */
-static void format_ts(char *out, size_t cap)
+static void reset_logs(void)
 {
-    time_t now = platform_wall_time();
-    struct tm tm;
-
-    if (now == (time_t)-1 || gmtime_r(&now, &tm) == NULL ||
-        strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm) == 0) {
-        (void)snprintf(out, cap, "%s", "-");
+    if (access_fd >= 0) {
+        (void)close(access_fd);
     }
-}
-
-/* 한 줄을 write 한 번으로 쓴다. 쓰기 실패는 무시하고 errno는 보존한다. */
-static void write_line(int fd, const char *p, size_t n)
-{
-    ssize_t w;
-
-    do {
-        w = write(fd, p, n);
-    } while (w < 0 && errno == EINTR);
-}
-
-/* 줄 버퍼 끝을 LF로 마무리한다. 넘쳤으면 잘라서 LF로 끝낸다. 결과 길이를 돌려준다. */
-static size_t finish_line(char *line, size_t len, size_t cap)
-{
-    if (len >= cap) {
-        len = cap - 1;
+    if (error_fd >= 0) {
+        (void)close(error_fd);
     }
-    while (len > 0 && line[len - 1] == '\n') {
-        len--;
-    }
-    line[len++] = '\n';
-    return len;
+    access_fd = -1;
+    error_fd = -1;
+    minimum = LOG_DEBUG;
 }
 
 int log_open(const char *access_path, const char *error_path, log_level_t min)
 {
-    int afd = -1;
-    int efd = -1;
-    int saved;
-
-    log_close();
-    if (access_path != NULL && access_path[0] != '\0') {
-        afd = open(access_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
-        if (afd < 0) {
-            return -1;
-        }
+    pthread_mutex_lock(&log_lock);
+    reset_logs();
+    int rc = 0;
+    if (open_log(access_path, &access_fd) < 0 || open_log(error_path, &error_fd) < 0) {
+        int saved = errno;
+        reset_logs();
+        errno = saved;
+        rc = -1;
+    } else {
+        minimum = min;
     }
-    if (error_path != NULL && error_path[0] != '\0') {
-        efd = open(error_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
-        if (efd < 0) {
-            saved = errno;
-            if (afd >= 0) {
-                (void)close(afd);
-            }
-            errno = saved;
-            return -1;
-        }
-    }
-    g_access_fd = afd;
-    g_error_fd = efd;
-    g_min = min;
-    return 0;
+    pthread_mutex_unlock(&log_lock);
+    return rc;
 }
 
 void log_close(void)
 {
     int saved = errno;
-
-    if (g_access_fd >= 0) {
-        (void)close(g_access_fd);
-    }
-    if (g_error_fd >= 0) {
-        (void)close(g_error_fd);
-    }
-    g_access_fd = -1;
-    g_error_fd = -1;
-    g_min = LOG_DEBUG;
+    pthread_mutex_lock(&log_lock);
+    reset_logs();
+    pthread_mutex_unlock(&log_lock);
     errno = saved;
+}
+
+static void timestamp(char out[32])
+{
+    time_t now = platform_wall_time();
+    struct tm utc;
+    if (now == (time_t)-1 || gmtime_r(&now, &utc) == NULL ||
+        strftime(out, 32, "%Y-%m-%dT%H:%M:%SZ", &utc) == 0) {
+        memcpy(out, "1970-01-01T00:00:00Z", sizeof("1970-01-01T00:00:00Z"));
+    }
+}
+
+static void submit(const buf_t *line, bool access, log_level_t level)
+{
+    /* fd 교체와 단일 write를 같은 잠금 아래에 두어 닫힌 fd에 기록하는 경합을 막는다. */
+    pthread_mutex_lock(&log_lock);
+    int fd = access ? access_fd : error_fd;
+    if (access || level >= minimum) {
+        ssize_t written = write(fd < 0 ? STDERR_FILENO : fd, line->data, line->len);
+        (void)written; /* 실패하거나 일부만 써도 두 번째 write로 다른 줄과 섞지 않는다. */
+    }
+    pthread_mutex_unlock(&log_lock);
+}
+
+static const char *or_dash(const char *s)
+{
+    return s == NULL ? "-" : s;
+}
+
+static int append_log_text(buf_t *out, const char *text, size_t len, bool target)
+{
+    static const char hex[] = "0123456789ABCDEF";
+
+    size_t start = 0;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        bool escape_byte = target ? (c < 0x20 || c == 0x7f || c == '"') : c == '\r' || c == '\n';
+        if (escape_byte) {
+            /* 원문의 제어 바이트가 로그 줄이나 접근 로그의 따옴표를 끊지 않게 한다. */
+            char escape[] = {'\\', 'x', hex[c >> 4], hex[c & 0x0f]};
+            if (buf_append(out, text + start, i - start) < 0 ||
+                buf_append(out, escape, sizeof(escape)) < 0) {
+                return -1;
+            }
+            start = i + 1;
+        }
+    }
+    return buf_append(out, text + start, len - start);
 }
 
 void log_access(const char *client_ip, const char *method, const char *target, int status,
                 uint64_t bytes, int64_t elapsed_ms)
 {
-    static const char hex[] = "0123456789ABCDEF";
-    char line[LOG_LINE_MAX];
-    char ts[LOG_TS_LEN + 1];
-    size_t len;
-    int saved = errno;
-    int n;
-
-    format_ts(ts, sizeof(ts));
-    n = snprintf(line, sizeof(line), "%s %s \"%s ", ts, client_ip != NULL ? client_ip : "-",
-                 method != NULL ? method : "-");
-    len = n < 0 ? 0 : (size_t)n;
-    if (target == NULL) {
-        target = "-";
+    char timebuf[32];
+    timestamp(timebuf);
+    const char *path = or_dash(target);
+    buf_t line;
+    if (buf_init(&line, 0, SIZE_MAX) == 0 &&
+        buf_appendf(&line, "%s %s \"%s ", timebuf, or_dash(client_ip), or_dash(method)) == 0 &&
+        append_log_text(&line, path, strlen(path), true) == 0 &&
+        buf_appendf(&line, "\" %d %" PRIu64 " %" PRId64 "ms\n", status, bytes, elapsed_ms) == 0) {
+        submit(&line, true, LOG_DEBUG);
     }
-    /* target: 제어 문자와 '"'는 \xHH. 뒤 꼬리(약 60바이트) 자리를 남기고 넘치면 자른다 */
-    for (const char *t = target; *t != '\0' && len + 4 < sizeof(line) - 64; t++) {
-        unsigned char c = (unsigned char)*t;
-
-        if (c < 0x20 || c == 0x7F || c == '"') {
-            line[len++] = '\\';
-            line[len++] = 'x';
-            line[len++] = hex[c >> 4];
-            line[len++] = hex[c & 0xF];
-        } else {
-            line[len++] = (char)c;
-        }
-    }
-    if (len < sizeof(line)) {
-        n = snprintf(line + len, sizeof(line) - len, "\" %d %llu %lldms", status,
-                     (unsigned long long)bytes, (long long)elapsed_ms);
-        len += n < 0 ? 0 : (size_t)n;
-    }
-    len = finish_line(line, len, sizeof(line));
-    write_line(fd_or_stderr(g_access_fd), line, len);
-    errno = saved;
+    buf_cleanup(&line);
 }
 
 void log_msg(log_level_t lvl, const char *fmt, ...)
 {
-    static const char *const names[] = {"DEBUG", "INFO", "WARN", "ERROR"};
-    char line[LOG_LINE_MAX];
-    char ts[LOG_TS_LEN + 1];
-    const char *name;
-    size_t len;
-    va_list ap;
-    int saved = errno;
-    int n;
-
-    if (lvl < g_min) {
+    static const char *const levels[] = {"DEBUG", "INFO", "WARN", "ERROR"};
+    if ((unsigned)lvl >= sizeof(levels) / sizeof(levels[0])) {
         return;
     }
-    name = (lvl >= LOG_DEBUG && lvl <= LOG_ERROR) ? names[lvl] : "?";
-    format_ts(ts, sizeof(ts));
-    n = snprintf(line, sizeof(line), "%s [%s] ", ts, name);
-    len = n < 0 ? 0 : (size_t)n;
+
+    va_list ap, measure;
     va_start(ap, fmt);
-    n = vsnprintf(line + len, sizeof(line) - len, fmt, ap);
+    va_copy(measure, ap);
+    int len = vsnprintf(NULL, 0, fmt, measure);
+    va_end(measure);
+    char *message = len >= 0 ? malloc((size_t)len + 1) : NULL;
+    int written = message == NULL ? -1 : vsnprintf(message, (size_t)len + 1, fmt, ap);
     va_end(ap);
-    len += n < 0 ? 0 : (size_t)n;
-    len = finish_line(line, len, sizeof(line));
-    write_line(fd_or_stderr(g_error_fd), line, len);
-    errno = saved;
+    if (message == NULL || written != len) {
+        free(message);
+        return;
+    }
+
+    size_t end = (size_t)len;
+    while (end > 0 && message[end - 1] == '\n') {
+        --end;
+    }
+    char timebuf[32];
+    timestamp(timebuf);
+    buf_t line;
+    if (buf_init(&line, 0, SIZE_MAX) == 0 &&
+        buf_appendf(&line, "%s [%s] ", timebuf, levels[lvl]) == 0 &&
+        append_log_text(&line, message, end, false) == 0 && buf_append(&line, "\n", 1) == 0) {
+        submit(&line, false, lvl);
+    }
+    buf_cleanup(&line);
+    free(message);
 }

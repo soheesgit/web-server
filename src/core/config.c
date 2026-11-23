@@ -552,8 +552,8 @@ static int validate(cfg_ctx_t *c, const char *file_path)
 
         if (r->kind == ROUTE_PROXY) {
             if (!upstream_defined(cfg, r->upstream)) {
-                return cfg_fail_at(c, c->route_line[i], EINVAL, "route %s: undefined upstream '%s'",
-                                   r->prefix, r->upstream);
+                return cfg_fail_at(c, c->route_line[i], EINVAL, "undefined upstream '%s'",
+                                   r->upstream);
             }
         } else if (!is_dir(r->root)) {
             return cfg_fail_at(c, c->route_line[i], errno, "route %s: not a directory: %s",

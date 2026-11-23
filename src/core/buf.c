@@ -1,12 +1,9 @@
-/* src/core/buf.c
- *
- * 가변 버퍼. 명세: buf.h
- */
+/* 상한이 있는 바이트 버퍼와 fd 입출력. */
 #include "core/buf.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,73 +11,46 @@
 
 #include "core/platform.h"
 
-#define BUF_MIN_GROW 64
-#define BUF_READ_CHUNK 65536
-
-/* cap이 need 이상이 되도록 늘린다 (max를 넘겨 할당하지 않음). 실패 시 내용 불변. */
-static int buf_reserve(buf_t *b, size_t need)
-{
-    size_t ncap;
-    char *nd;
-
-    if (need <= b->cap) {
-        return 0;
-    }
-    ncap = b->cap < BUF_MIN_GROW ? BUF_MIN_GROW : b->cap;
-    while (ncap < need) {
-        ncap = ncap > SIZE_MAX / 2 ? need : ncap * 2;
-    }
-    if (ncap > b->max) {
-        ncap = b->max;
-    }
-    nd = realloc(b->data, ncap);
-    if (nd == NULL) {
-        errno = ENOMEM;
-        return -1;
-    }
-    b->data = nd;
-    b->cap = ncap;
-    return 0;
-}
+enum { BUF_READ_SIZE = 16 * 1024 };
 
 int buf_init(buf_t *b, size_t initial, size_t max)
 {
-    memset(b, 0, sizeof(*b));
+    *b = (buf_t){0};
     if (max == 0) {
         errno = EINVAL;
         return -1;
     }
-    if (initial > max) {
-        initial = max;
-    }
-    if (initial > 0) {
-        b->data = malloc(initial);
-        if (b->data == NULL) {
-            errno = ENOMEM;
+    size_t cap = initial < max ? initial : max;
+    if (cap > 0) {
+        char *data = malloc(cap);
+        if (data == NULL) {
             return -1;
         }
+        b->data = data;
     }
-    b->cap = initial;
+    b->cap = cap;
     b->max = max;
     return 0;
 }
 
 void buf_cleanup(buf_t *b)
 {
-    int saved = errno;
-
     if (b != NULL) {
+        int saved = errno;
         free(b->data);
-        memset(b, 0, sizeof(*b));
+        *b = (buf_t){0};
+        errno = saved;
     }
-    errno = saved;
+}
+
+static size_t growth_capacity(const buf_t *b, size_t need)
+{
+    size_t doubled = b->cap <= b->max / 2 ? 2 * b->cap : b->max;
+    return need > doubled ? need : doubled;
 }
 
 int buf_append(buf_t *b, const void *p, size_t n)
 {
-    size_t off = 0;
-    int inside;
-
     if (n == 0) {
         return 0;
     }
@@ -88,58 +58,69 @@ int buf_append(buf_t *b, const void *p, size_t n)
         errno = EMSGSIZE;
         return -1;
     }
-    /* p가 b->data 안을 가리키면 재할당 후 위치를 다시 계산한다 */
-    inside = b->data != NULL && (const char *)p >= b->data && (const char *)p < b->data + b->cap;
-    if (inside) {
-        off = (size_t)((const char *)p - b->data);
+
+    size_t end = b->len + n;
+    if (end > b->cap) {
+        size_t cap = growth_capacity(b, end);
+        char *data = malloc(cap);
+        if (data == NULL) {
+            return -1;
+        }
+        /* p가 기존 버퍼를 가리켜도 두 복사가 끝나기 전까지 원본을 해제하지 않는다. */
+        if (b->len > 0) {
+            memcpy(data, b->data, b->len);
+        }
+        memcpy(data + b->len, p, n);
+        free(b->data);
+        b->data = data;
+        b->cap = cap;
+    } else {
+        memmove(b->data + b->len, p, n);
     }
-    if (buf_reserve(b, b->len + n) != 0) {
-        return -1;
-    }
-    memmove(b->data + b->len, inside ? b->data + off : p, n);
-    b->len += n;
+    b->len = end;
     return 0;
 }
 
 int buf_appendf(buf_t *b, const char *fmt, ...)
 {
-    va_list ap;
-    int need;
-    char *tmp;
-    int rc;
+    va_list ap, measure;
+    va_start(ap, fmt);
+    va_copy(measure, ap);
+    int len = vsnprintf(NULL, 0, fmt, measure);
+    va_end(measure);
+    if (len < 0 || (size_t)len > b->max - b->len) {
+        va_end(ap);
+        errno = len < 0 ? EINVAL : EMSGSIZE;
+        return -1;
+    }
+    if (len == 0) {
+        va_end(ap);
+        return 0;
+    }
 
-    va_start(ap, fmt);
-    need = vsnprintf(NULL, 0, fmt, ap);
-    va_end(ap);
-    if (need < 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    if ((size_t)need > b->max - b->len) {
-        errno = EMSGSIZE;
-        return -1;
-    }
-    tmp = malloc((size_t)need + 1);
+    /* 임시 버퍼에서 포맷을 완성해야 실패할 때 기존 바이트가 그대로 남는다. */
+    char *tmp = malloc((size_t)len + 1);
     if (tmp == NULL) {
-        errno = ENOMEM;
+        va_end(ap);
         return -1;
     }
-    va_start(ap, fmt);
-    (void)vsnprintf(tmp, (size_t)need + 1, fmt, ap);
+    int written = vsnprintf(tmp, (size_t)len + 1, fmt, ap);
     va_end(ap);
-    rc = buf_append(b, tmp, (size_t)need);
+    int result = written == len ? buf_append(b, tmp, (size_t)len) : -1;
+    int saved = written == len ? errno : EINVAL;
     free(tmp);
-    return rc;
+    errno = saved;
+    return result;
 }
 
 void buf_consume(buf_t *b, size_t n)
 {
     if (n >= b->len) {
         b->len = 0;
-        return;
+    } else if (n != 0) {
+        b->len -= n;
+        memmove(b->data, b->data + n, b->len);
     }
-    memmove(b->data, b->data + n, b->len - n);
-    b->len -= n;
 }
 
 void buf_reset(buf_t *b)
@@ -149,48 +130,48 @@ void buf_reset(buf_t *b)
 
 ssize_t buf_read_fd(buf_t *b, int fd)
 {
-    size_t want;
-    ssize_t r;
-
-    if (b->len >= b->max) {
+    size_t room = b->max - b->len;
+    if (room == 0) {
         errno = EMSGSIZE;
         return -1;
     }
-    want = b->max - b->len;
-    if (want > BUF_READ_CHUNK) {
-        want = BUF_READ_CHUNK;
-    }
-    if (buf_reserve(b, b->len + want) != 0) {
-        /* 큰 덩어리를 못 잡았으면 남은 용량만큼만 읽는다 */
-        if (b->cap <= b->len) {
+    size_t count = room < BUF_READ_SIZE ? room : BUF_READ_SIZE;
+    size_t end = b->len + count;
+    if (end > b->cap) {
+        /* 읽기 전에 자리를 확보해 할당 실패로 fd에서 읽은 데이터를 잃지 않는다. */
+        size_t cap = growth_capacity(b, end);
+        char *data = realloc(b->data, cap);
+        if (data == NULL) {
             return -1;
         }
-        want = b->cap - b->len;
+        b->data = data;
+        b->cap = cap;
     }
+    ssize_t n;
     do {
-        r = read(fd, b->data + b->len, want);
-    } while (r < 0 && errno == EINTR);
-    if (r > 0) {
-        b->len += (size_t)r;
+        n = read(fd, b->data + b->len, count);
+    } while (n < 0 && errno == EINTR);
+    if (n > 0) {
+        b->len += (size_t)n;
     }
-    return r;
+    return n;
 }
 
 ssize_t buf_write_fd(buf_t *b, int fd)
 {
-    ssize_t w;
-
     if (b->len == 0) {
         return 0;
     }
-    w = platform_send(fd, b->data, b->len);
-    if (w < 0 && errno == ENOTSOCK) {
+    size_t count = b->len > (size_t)SSIZE_MAX ? (size_t)SSIZE_MAX : b->len;
+    ssize_t n = platform_send(fd, b->data, count);
+    if (n < 0 && errno == ENOTSOCK) {
         do {
-            w = write(fd, b->data, b->len);
-        } while (w < 0 && errno == EINTR);
+            n = write(fd, b->data, count);
+        } while (n < 0 && errno == EINTR);
     }
-    if (w > 0) {
-        buf_consume(b, (size_t)w);
+    /* 부분 전송과 일시적인 오류 모두 아직 전송하지 않은 바이트는 그대로 남긴다. */
+    if (n > 0) {
+        buf_consume(b, (size_t)n);
     }
-    return w;
+    return n;
 }
