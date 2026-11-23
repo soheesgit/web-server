@@ -44,8 +44,6 @@ U-DS-44
 # --- U-RT --- 계약 최소셋: router
 
 # --- U-HD --- 계약 최소셋: handler (plan·static·cgi)
-U-HD-02
-U-HD-04
 U-HD-09
 U-HD-11
 U-HD-14

@@ -34,7 +34,7 @@
 
 ## 구현 단계
 3단계 STATIC·CGI: B `cgi` · C `plan`, `static`, `mime`. 4단계 PROXY: B `proxy`.
-- [ ] plan (+ handler_dispatch)
+- [x] plan (+ handler_dispatch)
 - [ ] mime
 - [ ] static
 - [ ] cgi
