@@ -47,6 +47,34 @@ static void cb_close(void *ctx, void *obj)
     conn_free(obj);
 }
 
+/* v2: conn이 기다리겠다는 것에 맞춰 클라이언트 fd 감시를 바꾼다. CONN_CLOSE면 -1.
+ * WAIT_FD 동안은 conn이 추가 fd를 감시하므로 클라이언트 fd는 쉬게 둔다. */
+static int rewatch(const conn_env_t *env, conn_t *c, conn_status_t st)
+{
+    unsigned ev = st == CONN_WANT_READ ? EV_READ : st == CONN_WANT_WRITE ? EV_WRITE : 0u;
+
+    if (st == CONN_CLOSE) {
+        return -1;
+    }
+    return engine_watch(env->engine, conn_fd(c), ev, c) == 0 ? 0 : -1;
+}
+
+static int cb_event(void *ctx, void *obj, int fd, unsigned events, int64_t now_ms)
+{
+    return rewatch(ctx, obj, conn_on_event(obj, fd, events, now_ms));
+}
+
+static int cb_timeout(void *ctx, void *obj, int64_t now_ms)
+{
+    return rewatch(ctx, obj, conn_on_timeout(obj, now_ms));
+}
+
+static int64_t cb_deadline(void *ctx, void *obj)
+{
+    (void)ctx;
+    return conn_deadline_ms(obj);
+}
+
 /* D-005: 작업 큐가 가득이면 503 + Connection: close 후 닫는다. */
 static void cb_busy(void *ctx, int fd)
 {
@@ -69,7 +97,7 @@ static void cb_busy(void *ctx, int fd)
 }
 
 static const engine_callbacks_t CONN_CALLBACKS = {
-    cb_accept, cb_serve, NULL, NULL, NULL, cb_close, cb_busy,
+    cb_accept, cb_serve, cb_event, cb_timeout, cb_deadline, cb_close, cb_busy,
 };
 
 app_t *app_new(const config_t *cfg, char *err, size_t errcap)
@@ -108,10 +136,11 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
     a->env.nonblocking = kind == ENGINE_EVENT_LOOP;
     a->engine = engine_new(kind, a->cfg.workers, a->cfg.queue_len, &CONN_CALLBACKS, &a->env);
     if (a->engine == NULL) {
-        (void)snprintf(err, errcap, "engine: %s",
-                       errno == ENOSYS ? "event loop is not implemented yet"
-                                       : "cannot create (out of memory or bad workers)");
+        (void)snprintf(err, errcap, "engine: cannot create (out of memory or bad workers)");
         goto fail;
+    }
+    if (kind == ENGINE_EVENT_LOOP) {
+        a->env.engine = a->engine; /* conn이 추가 fd를 등록할 엔진 */
     }
     return a;
 
@@ -124,9 +153,13 @@ int app_run(app_t *a, volatile sig_atomic_t *stop)
 {
     int rc;
 
-    log_msg(LOG_INFO, "listening on %s:%u (%s, %d workers)", a->cfg.listen_host,
-            (unsigned)a->cfg.port, a->cfg.engine == CFG_ENGINE_LOOP ? "loop" : "pool",
-            a->cfg.workers);
+    if (a->cfg.engine == CFG_ENGINE_LOOP) {
+        log_msg(LOG_INFO, "listening on %s:%u (event loop)", a->cfg.listen_host,
+                (unsigned)a->cfg.port);
+    } else {
+        log_msg(LOG_INFO, "listening on %s:%u (thread pool, %d workers)", a->cfg.listen_host,
+                (unsigned)a->cfg.port, a->cfg.workers);
+    }
     rc = engine_run(a->engine, a->lfd, stop, a->cfg.shutdown_grace_ms);
     log_msg(LOG_INFO, "stopped (%s)", rc == 0 ? "ok" : "engine error");
     return rc;
