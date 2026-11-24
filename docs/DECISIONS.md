@@ -323,3 +323,11 @@
 - 결정: (1) 포워드 경로(`route … forward`)의 GET만 다룬다. 리버스 프록시·정적·CGI는 캐시하지 않는다. (2) 저장 조건: 상태 200, Content-Length로 끝이 정해진 응답, 본문이 `cache_entry_max` 이하, 신선도가 있음(`s-maxage` → `max-age`, `Age`만큼 뺌, 상한 하루). `no-store`·`no-cache`·`private`·`Vary`·`Set-Cookie`가 있으면 저장하지 않는다. `Expires`와 휴리스틱 신선도는 쓰지 않는다. (3) 요청에 `Authorization`·`Range`·`no-cache`·`no-store`(또는 `Pragma: no-cache`)가 있으면 저장본을 쓰지 않고, `Authorization`·`Range`·`no-store`면 응답도 저장하지 않는다. (4) 같은 URL로 POST가 오면 그 항목을 지운다. (5) 적중 응답은 `Age`와 `X-Cache: HIT`를, 원본까지 간 포워드 GET은 `X-Cache: MISS`를 붙인다. (6) 저장소는 프로세스 하나에 하나, 뮤텍스로 보호하고 총 바이트 상한(`cache_max_bytes`, 기본 8 MiB, 0이면 끔)을 넘으면 가장 오래 안 쓴 항목부터 지운다. 키는 absolute-form 대상(스킴·호스트는 소문자). (7) 복사 지점은 conn의 업스트림 본문 전달 두 곳(v1 `send_upstream_body`, v2 `upstream_pull`)이고 `proxy_body_tee`·`proxy_body_done`을 부른다.
 - 대안: 캐시 미스 때 handler가 원본에서 블로킹으로 통째로 받아 오기 (v2 루프가 응답 시간만큼 멈춤), 캐시를 서버 시작 때 `upstream` 그룹에 묶기 (handler가 upstream 내부 상태를 알아야 함), 해시 표 (항목이 수백 개인 규모에서는 연결 리스트로 충분하다. 코드에 `shortcut:` 주석).
 - 영향: `src/handler/{cache.c,internal_cache.h,proxy.c,handler.h}`, `src/downstream/conn.c`, `src/common/types.h`(`proxy_job_t.fill`), `src/core/config.{h,c}`(`cache_max_bytes`, `cache_entry_max`). E-FW-02~E-FW-07 (두 엔진).
+
+## D-043 요청이 끝나면 연결 버퍼의 용량을 줄인다
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: `buf_consume`·`buf_reset`은 길이만 줄이고 용량은 그대로 둔다(buf.h 명세). 연결의 읽기 버퍼는 요청 본문 상한(기본 10 MiB)까지 커질 수 있고, 2배씩 늘어 본문보다 큰 용량이 잡힌다. 큰 본문을 한 번 받은 keep-alive 연결이 그 메모리를 연결이 닫힐 때까지 쥔다. 측정(2026-11-24, WSL, 연결 30개가 각각 CGI에 2 MiB POST 뒤 연결 유지): pool RSS 3,476 KB → 128,572 KB, 연결당 약 4 MB.
+- 결정: `buf_shrink(b, keep)`를 추가한다. 용량이 max(len, keep)보다 크면 그 크기로 realloc하고, 아니면 아무 일도 없다 (내용·len·max 유지, 실패하면 그대로). conn은 요청 하나를 끝낸 직후(`finish_request`에서 계획·요청 뷰를 비우고 `buf_consume`한 뒤) 읽기·쓰기·pipe 버퍼에 `CONN_KEEP_BUF`(64 KiB)로 부른다. realloc으로 주소가 바뀌므로 이 시점에는 이 버퍼를 빌린 `str_t`가 남아 있으면 안 된다.
+- 대안: 연결을 닫을 때만 해제 (현재 동작, keep-alive 연결이 메모리를 쥠), 2배 확장 대신 필요한 만큼만 확장 (재할당이 잦아짐), 요청마다 버퍼를 새로 만들고 해제 (할당 횟수 증가).
+- 영향: `src/core/buf.{h,c}`, `src/downstream/conn.c`. 측정(같은 조건): pool 128,572 KB → 66,992 KB, loop 13,552 KB → 7,552 KB. pool에 남은 값은 glibc가 스레드마다 쥐는 메모리 영역의 보유분이다 (`MALLOC_ARENA_MAX=1`이면 8,784 KB). 성질 검사 `tests/robust` props (buf).
