@@ -48,7 +48,14 @@ static void reject_busy(void *ctx, int fd)
         "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
     (void)ctx;
     if (platform_set_nonblock(fd) == 0) {
-        (void)platform_send(fd, response, sizeof(response) - 1);
+        size_t sent = 0;
+        while (sent < sizeof(response) - 1) {
+            ssize_t n = platform_send(fd, response + sent, sizeof(response) - 1 - sent);
+            if (n <= 0) {
+                break;
+            }
+            sent += (size_t)n;
+        }
     }
     close(fd);
 }
