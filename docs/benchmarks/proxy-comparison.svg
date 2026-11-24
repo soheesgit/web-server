@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="585" viewBox="0 0 900 585" role="img" aria-labelledby="title">
+<title id="title">Proxy benchmark means and standard deviations</title>
+<rect width="900" height="585" fill="#ffffff"/>
+<g font-family="system-ui, sans-serif" fill="#183047">
+<text x="35" y="38" font-size="22" font-weight="700">C HTTP proxy · 90 trials</text>
+<text x="35" y="65" font-size="13" font-weight="400">Bar length is the mean. Whiskers show one sample standard deviation.</text>
+<text x="35" y="114" font-size="17" font-weight="700">Heterogeneous backends</text>
+<text x="35" y="159" font-size="13" font-weight="400">RR</text>
+<rect x="167" y="144" width="91.8" height="17" rx="2" fill="#37689d"/>
+<path d="M257.8 152.5H259.7 M257.8 148.5v8 M259.7 148.5v8" stroke="#183047" fill="none"/>
+<text x="167" y="178" font-size="12" font-weight="400">2,764.45 req/s</text>
+<text x="35" y="201" font-size="13" font-weight="400">Least Requests</text>
+<rect x="167" y="186" width="164.3" height="17" rx="2" fill="#008575"/>
+<path d="M316.3 194.5H346.2 M316.3 190.5v8 M346.2 190.5v8" stroke="#183047" fill="none"/>
+<text x="167" y="220" font-size="12" font-weight="400">4,948.68 req/s</text>
+<text x="35" y="243" font-size="13" font-weight="400">P2C</text>
+<rect x="167" y="228" width="147.8" height="17" rx="2" fill="#a85b1f"/>
+<path d="M309.5 236.5H320.1 M309.5 232.5v8 M320.1 232.5v8" stroke="#183047" fill="none"/>
+<text x="167" y="262" font-size="12" font-weight="400">4,451.57 req/s</text>
+<text x="428" y="114" font-size="17" font-weight="700">Partial outage · P95 latency</text>
+<text x="428" y="159" font-size="13" font-weight="400">RR</text>
+<rect x="560" y="144" width="117.6" height="17" rx="2" fill="#37689d"/>
+<path d="M615.9 152.5H739.2 M615.9 148.5v8 M739.2 148.5v8" stroke="#183047" fill="none"/>
+<text x="560" y="178" font-size="12" font-weight="400">13.29 ms</text>
+<text x="428" y="201" font-size="13" font-weight="400">Least Requests</text>
+<rect x="560" y="186" width="30.8" height="17" rx="2" fill="#008575"/>
+<path d="M588.5 194.5H593.2 M588.5 190.5v8 M593.2 190.5v8" stroke="#183047" fill="none"/>
+<text x="560" y="220" font-size="12" font-weight="400">3.49 ms</text>
+<text x="428" y="243" font-size="13" font-weight="400">P2C</text>
+<rect x="560" y="228" width="34.9" height="17" rx="2" fill="#a85b1f"/>
+<path d="M593.9 236.5H595.8 M593.9 232.5v8 M595.8 232.5v8" stroke="#183047" fill="none"/>
+<text x="560" y="262" font-size="12" font-weight="400">3.94 ms</text>
+<text x="35" y="321" font-size="17" font-weight="700">High concurrency · New upstream TCP</text>
+<text x="35" y="366" font-size="13" font-weight="400">1</text>
+<rect x="167" y="351" width="173.9" height="17" rx="2" fill="#37689d"/>
+<path d="M335.6 359.5H346.2 M335.6 355.5v8 M346.2 355.5v8" stroke="#183047" fill="none"/>
+<text x="167" y="385" font-size="12" font-weight="400">407.60 connections</text>
+<text x="35" y="408" font-size="13" font-weight="400">8</text>
+<rect x="167" y="393" width="58.2" height="17" rx="2" fill="#008575"/>
+<path d="M223.2 401.5H227.2 M223.2 397.5v8 M227.2 397.5v8" stroke="#183047" fill="none"/>
+<text x="167" y="427" font-size="12" font-weight="400">136.40 connections</text>
+<text x="35" y="450" font-size="13" font-weight="400">50</text>
+<rect x="167" y="435" width="40.8" height="17" rx="2" fill="#a85b1f"/>
+<path d="M207.6 443.5H208.0 M207.6 439.5v8 M208.0 439.5v8" stroke="#183047" fill="none"/>
+<text x="167" y="469" font-size="12" font-weight="400">95.60 connections</text>
+<text x="428" y="321" font-size="17" font-weight="700">High concurrency · P95 latency</text>
+<text x="428" y="366" font-size="13" font-weight="400">1</text>
+<rect x="560" y="351" width="137.1" height="17" rx="2" fill="#37689d"/>
+<path d="M691.0 359.5H703.3 M691.0 355.5v8 M703.3 355.5v8" stroke="#183047" fill="none"/>
+<text x="560" y="385" font-size="12" font-weight="400">12.86 ms</text>
+<text x="428" y="408" font-size="13" font-weight="400">8</text>
+<rect x="560" y="393" width="145.2" height="17" rx="2" fill="#008575"/>
+<path d="M671.2 401.5H739.2 M671.2 397.5v8 M739.2 397.5v8" stroke="#183047" fill="none"/>
+<text x="560" y="427" font-size="12" font-weight="400">13.62 ms</text>
+<text x="428" y="450" font-size="13" font-weight="400">50</text>
+<rect x="560" y="435" width="96.2" height="17" rx="2" fill="#a85b1f"/>
+<path d="M654.2 443.5H658.2 M654.2 439.5v8 M658.2 439.5v8" stroke="#183047" fill="none"/>
+<text x="560" y="469" font-size="12" font-weight="400">9.02 ms</text>
+<text x="35" y="537" font-size="13" font-weight="400">macOS arm64  ·  1 KiB response  ·  72 proxy workers  ·  5 trials per condition</text>
+</g></svg>
