@@ -17,6 +17,10 @@ LLM 트래픽을 흉내 내 게이트웨이(httpd)를 재는 도구. `make test`
 
 ## 시간 측정
 
+- **노트북은 절전되지 않게** `caffeinate -i python3 -I bench/run_bench.py ...`로 돌린다. 2026-11-24에
+  자동 절전(Idle Sleep)으로 실행 중 9~15분이 멈춰 스트림이 수백 초 멈춘 것처럼 기록됐다
+  (`results/_invalid-sleep/`). 절전 기록은 `pmset -g log | grep -E "Sleep|Wake"`로 확인한다.
+
 - 모든 도구가 `time.clock_gettime(CLOCK_MONOTONIC)`(ms)를 쓴다. macOS의 `time.monotonic()`은
   프로세스마다 기준이 달라 프로세스 사이 비교에 쓸 수 없다.
 - fake_llm은 마지막 SSE 이벤트에 자기 쪽 시간(`queue_ms`, `prefill_ms`, `ttft_backend_ms`)을
