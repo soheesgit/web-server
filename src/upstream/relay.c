@@ -10,6 +10,9 @@
 #include "upstream/internal_state.h"
 #include "upstream/response_parser.h"
 
+#define RELAY_SEND_BUDGET (64u << 10)
+#define RELAY_READ_BUDGET 4
+
 typedef enum { CONNECTING, SENDING, READING, FINISHED, FAILED } relay_phase_t;
 
 struct relay {
@@ -73,6 +76,7 @@ static relay_status_t read_head(relay_t *r)
 {
     buf_t *b = &r->conn->rbuf;
     int ignored;
+    unsigned reads = 0;
     for (;;) {
         if (platform_now_ms() >= r->deadline) {
             return fail(r, PFAIL_TIMEOUT, true);
@@ -90,6 +94,10 @@ static relay_status_t read_head(relay_t *r)
             buf_consume(b, r->resp.head_len);
             continue;
         }
+        if (reads == RELAY_READ_BUDGET) {
+            return RELAY_WANT_READ;
+        }
+        reads++;
         ssize_t n = buf_read_fd(b, r->conn->fd);
         if (n <= 0) {
             if (n < 0 && retryable_io()) {
@@ -127,15 +135,18 @@ relay_status_t relay_step(relay_t *r, unsigned events, int64_t now_ms)
         if (request->len == 0) {
             return fail(r, PFAIL_SEND, false);
         }
-        while (r->offset < request->len) {
+        size_t budget = RELAY_SEND_BUDGET;
+        while (r->offset < request->len && budget > 0) {
             if (platform_now_ms() >= r->deadline) {
                 return fail(r, PFAIL_TIMEOUT, true);
             }
-            ssize_t n =
-                platform_send(r->conn->fd, request->data + r->offset, request->len - r->offset);
+            size_t left = request->len - r->offset;
+            ssize_t n = platform_send(r->conn->fd, request->data + r->offset,
+                                      left < budget ? left : budget);
             if (n > 0) {
                 r->job->sent_any = true;
                 r->offset += (size_t)n;
+                budget -= (size_t)n;
                 continue;
             }
             if (n < 0 && retryable_io()) {
@@ -153,6 +164,9 @@ relay_status_t relay_step(relay_t *r, unsigned events, int64_t now_ms)
                 return RELAY_WANT_WRITE;
             }
             return fail(r, PFAIL_SEND, true);
+        }
+        if (r->offset < request->len) {
+            return RELAY_WANT_WRITE;
         }
         r->phase = READING;
         r->deadline = platform_now_ms() + r->response_ms;
