@@ -154,7 +154,7 @@ typedef struct {
     uint16_t port;                  /* 기본 8080. 1~65535 */
     int backlog;                    /* listen backlog. 기본 128 */
     char root[CFG_PATH_MAX];  /* 기본 "./www". 규칙이 하나도 없을 때의 STATIC 루트 */
-    cfg_engine_t engine;      /* 기본 CFG_ENGINE_POOL */
+    cfg_engine_t engine;      /* 기본 CFG_ENGINE_LOOP (D-041) */
     int workers;              /* 기본 CPU 코어 × 2 (sysconf 실패 시 4). 1~1024 */
     int queue_len;            /* v1 작업 큐 길이. 기본 1024 */
     size_t max_head;          /* 요청 헤더 총량 상한 (바이트). 기본 8192 */

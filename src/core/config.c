@@ -33,7 +33,7 @@ void config_defaults(config_t *out_cfg)
     out_cfg->port = 8080;
     out_cfg->backlog = 128;
     (void)snprintf(out_cfg->root, sizeof(out_cfg->root), "%s", "./www");
-    out_cfg->engine = CFG_ENGINE_POOL;
+    out_cfg->engine = CFG_ENGINE_LOOP;
     out_cfg->workers = workers;
     out_cfg->queue_len = 1024;
     out_cfg->max_head = 8192;
@@ -661,6 +661,6 @@ void config_print_usage(const char *prog)
     printf("  -r <root>     static file root directory (default ./www)\n");
     printf("  -c <file>     configuration file (grammar: src/core/config.h)\n");
     printf("  -w <workers>  worker threads for the pool engine (default: CPU cores x 2)\n");
-    printf("  -e pool|loop  concurrency engine (default pool)\n");
+    printf("  -e pool|loop  concurrency engine (default loop)\n");
     printf("  -h, --help    show this help and exit\n");
 }

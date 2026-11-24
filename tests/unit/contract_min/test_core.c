@@ -210,7 +210,7 @@ static void t_u_core_17(void)
     CHECK_EQ_STR(cfg.listen_host, "0.0.0.0");
     CHECK_EQ_INT(cfg.port, 8080);
     CHECK_EQ_STR(cfg.root, "./www");
-    CHECK_EQ_INT(cfg.engine, CFG_ENGINE_POOL);
+    CHECK_EQ_INT(cfg.engine, CFG_ENGINE_LOOP); /* D-041 */
     CHECK_EQ_INT(cfg.workers, want_workers);
     CHECK_EQ_INT(cfg.max_head, 8192);
     CHECK_EQ_INT(cfg.max_uri, 2048);

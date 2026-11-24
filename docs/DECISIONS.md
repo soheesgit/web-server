@@ -317,3 +317,11 @@
 - 결정: 잘못된 길이, 충돌하는 길이, 중복 `Status`는 CGI 응답 오류(502)로 처리한다.
 - 대안: 오류가 있는 항목을 버리고 나머지 헤더만 사용.
 - 영향: `handler/cgi.c`. U-HD-26~30, E-CG-05.
+
+## D-041 기본 엔진을 이벤트 루프로
+- 상태: 확정
+- 날짜: 2026-11-24
+- 맥락: v2 이벤트 루프가 E2E를 v1 스레드 풀과 같은 결과로 통과한다(macOS kqueue, Linux epoll). LLM 스트리밍처럼 오래 열린 응답은 v1에서 연결마다 워커 하나를 붙잡아 게이트웨이가 먼저 막힌다.
+- 결정: `config_defaults`의 기본 엔진을 `CFG_ENGINE_LOOP`로 바꾼다. v1 스레드 풀 코드는 지우지 않고 `-e pool`·`engine pool`로 계속 고를 수 있게 두며, 비교 기준선으로 E2E를 양쪽 엔진에서 통과시킨다.
+- 대안: 기본값을 pool로 유지하고 loop를 선택 기능으로 둠. v1 코드를 제거.
+- 영향: `core/config.h`(engine 필드 주석), `core/config.c`(기본값, 사용법 문구), `tests/unit/contract_min/test_core.c`(기본값 기대). E-* 전체가 기본으로 loop에서 돈다.
