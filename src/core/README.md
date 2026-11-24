@@ -12,7 +12,7 @@
 | 파일 | 역할 | 그림의 블록 | 공개 함수 |
 | --- | --- | --- | --- |
 | `str.h` `str.c` | 문자열 뷰 비교·트림·숫자 변환 | 기반 | `str_from_cstr`, `str_eq`, `str_eq_ci`, `str_eq_ci_str`, `str_trim_ows`, `str_to_u64`, `str_to_cstr` |
-| `buf.h` `buf.c` | 가변 버퍼, fd 읽기·쓰기 | 기반 | `buf_init`, `buf_cleanup`, `buf_append`, `buf_appendf`, `buf_consume`, `buf_reset`, `buf_read_fd`, `buf_write_fd` |
+| `buf.h` `buf.c` | 가변 버퍼, fd 읽기·쓰기 | 기반 | `buf_init`, `buf_cleanup`, `buf_append`, `buf_appendf`, `buf_consume`, `buf_shrink`, `buf_reset`, `buf_read_fd`, `buf_write_fd` |
 | `log.h` `log.c` | 접근·에러 로그 (스레드 안전) | 기반 | `log_open`, `log_close`, `log_access`, `log_msg` |
 | `config.h` `config.c` | CLI + 설정 파일 → `config_t` (문법은 config.h 머리 주석) | 기반 | `config_defaults`, `config_load`, `config_print_usage` |
 | `platform.h` `platform.c` | nonblock, cloexec, SIGPIPE, sendfile, 시계, rlimit | 기반 | `platform_set_nonblock`, `platform_set_cloexec`, `platform_ignore_sigpipe`, `platform_send`, `platform_sendfile`, `platform_now_ms`, `platform_wall_time`, `platform_raise_nofile` |
