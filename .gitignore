@@ -8,3 +8,4 @@ tests/fixtures/www/secret.txt
 tests/fixtures/www/escape
 tests/fixtures/www/fifo
 .DS_Store
+bench/results/
