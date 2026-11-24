@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "core/platform.h"
+#include "engine/internal_loop.h"
 
 typedef struct {
     int fd;
@@ -23,6 +24,7 @@ typedef struct {
 } worker_t;
 
 struct engine {
+    engine_loop_t *loop;
     const engine_callbacks_t *cb;
     void *ctx;
     pthread_mutex_t lock;
@@ -71,12 +73,20 @@ static void *serve(void *arg)
 engine_t *engine_new(engine_kind_t kind, int workers, int queue_len, const engine_callbacks_t *cb,
                      void *ctx)
 {
-    if (kind != ENGINE_THREAD_POOL) {
-        errno = ENOTSUP;
-        return NULL;
+    if (kind == ENGINE_EVENT_LOOP) {
+        engine_t *e = calloc(1, sizeof(*e));
+        if (e == NULL) {
+            return NULL;
+        }
+        e->loop = engine_loop_new(cb, ctx);
+        if (e->loop == NULL) {
+            free(e);
+            return NULL;
+        }
+        return e;
     }
-    if (workers < 1 || queue_len < 1 || cb == NULL || cb->on_accept == NULL ||
-        cb->serve_blocking == NULL || cb->on_close == NULL) {
+    if (kind != ENGINE_THREAD_POOL || workers < 1 || queue_len < 1 || cb == NULL ||
+        cb->on_accept == NULL || cb->serve_blocking == NULL || cb->on_close == NULL) {
         errno = EINVAL;
         return NULL;
     }
@@ -205,6 +215,9 @@ static void stop_workers(engine_t *e, size_t started, int grace_ms)
 
 int engine_run(engine_t *e, int listen_fd, volatile sig_atomic_t *stop, int shutdown_grace_ms)
 {
+    if (e->loop != NULL) {
+        return engine_loop_run(e->loop, listen_fd, stop, shutdown_grace_ms);
+    }
     size_t started = 0;
     int error = 0;
     for (; started < e->nworkers; started++) {
@@ -227,14 +240,36 @@ int engine_run(engine_t *e, int listen_fd, volatile sig_atomic_t *stop, int shut
     return 0;
 }
 
+int engine_watch(engine_t *e, int fd, unsigned events, void *obj)
+{
+    if (e->loop == NULL) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return engine_loop_watch(e->loop, fd, events, obj);
+}
+
+int engine_unwatch(engine_t *e, int fd)
+{
+    if (e->loop == NULL) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return engine_loop_unwatch(e->loop, fd);
+}
+
 void engine_free(engine_t *e)
 {
     int saved = errno;
     if (e != NULL) {
-        pthread_cond_destroy(&e->ready);
-        pthread_mutex_destroy(&e->lock);
-        free(e->queue);
-        free(e->workers);
+        if (e->loop != NULL) {
+            engine_loop_free(e->loop);
+        } else {
+            pthread_cond_destroy(&e->ready);
+            pthread_mutex_destroy(&e->lock);
+            free(e->queue);
+            free(e->workers);
+        }
         free(e);
     }
     errno = saved;
