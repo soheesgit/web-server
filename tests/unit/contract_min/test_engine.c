@@ -5,6 +5,7 @@
 #include "unit/testlib.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -364,10 +365,45 @@ static void t_u_en_05(void)
     close(sv[1]);
 }
 
+static void t_u_en_06(void)
+{
+    poller_t *p = poller_new();
+    poller_event_t events[4];
+    int sv[2];
+    int old_marker, new_marker;
+    char byte;
+
+    CHECK(p != NULL);
+    CHECK_EQ_INT(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    CHECK_EQ_INT(poller_add(p, sv[0], EV_READ | EV_WRITE, &old_marker), 0);
+    CHECK_EQ_INT(write(sv[1], "a", 1), 1);
+    CHECK_EQ_INT(poller_wait(p, events, 4, 1000), 1);
+    CHECK_EQ_INT(events[0].fd, sv[0]);
+    CHECK_EQ_INT(events[0].events, EV_READ | EV_WRITE);
+    CHECK(events[0].ptr == &old_marker);
+
+    CHECK_EQ_INT(poller_mod(p, sv[0], 0, &new_marker), 0);
+    CHECK_EQ_INT(poller_wait(p, events, 4, 0), 0);
+    CHECK_EQ_INT(poller_mod(p, sv[0], EV_READ, &new_marker), 0);
+    CHECK_EQ_INT(poller_wait(p, events, 4, 1000), 1);
+    CHECK_EQ_INT(events[0].events, EV_READ);
+    CHECK(events[0].ptr == &new_marker);
+    CHECK_EQ_INT(poller_del(p, sv[0]), 0);
+    CHECK_EQ_INT(poller_mod(p, sv[0], EV_READ, &old_marker), -1);
+    CHECK_EQ_INT(errno, ENOENT);
+    CHECK_EQ_INT(poller_wait(p, events, 4, 0), 0);
+    poller_free(p);
+    CHECK_EQ_INT(read(sv[0], &byte, 1), 1);
+    CHECK_EQ_INT(byte, 'a');
+    close(sv[0]);
+    close(sv[1]);
+}
+
 void register_engine_tests(void)
 {
     test_register("U-EN-01", "engine_run: pool of 4 stops 100ms after flag", t_u_en_01);
     test_register("U-EN-02", "engine: 1000 connections served exactly once", t_u_en_02);
     test_register("U-EN-03", "engine: a full queue calls on_busy before on_accept", t_u_en_03);
     test_register("U-EN-05", "poller: socketpair read event returns ptr", t_u_en_05);
+    test_register("U-EN-06", "poller: merge, pause, resume and remove a registration", t_u_en_06);
 }
