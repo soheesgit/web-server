@@ -325,3 +325,11 @@
 - 결정: `config_defaults`의 기본 엔진을 `CFG_ENGINE_LOOP`로 바꾼다. v1 스레드 풀 코드는 지우지 않고 `-e pool`·`engine pool`로 계속 고를 수 있게 두며, 비교 기준선으로 E2E를 양쪽 엔진에서 통과시킨다.
 - 대안: 기본값을 pool로 유지하고 loop를 선택 기능으로 둠. v1 코드를 제거.
 - 영향: `core/config.h`(engine 필드 주석), `core/config.c`(기본값, 사용법 문구), `tests/unit/contract_min/test_core.c`(기본값 기대). E-* 전체가 기본으로 loop에서 돈다.
+
+## D-042 그룹별 picker와 고정 키 해싱 (실험)
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: LLM 벤치 E2(`bench/`)에서 라운드로빈은 요청 수는 고르게 나누지만, 같은 대화가 매번 다른 백엔드로 가서 prefix 캐시를 살리지 못한다(보정: 캐시 적중 시 prefill 약 99% 감소). 기획서 FR-LB-01·03, FR-LLM-08.
+- 결정: 설정에 `picker <그룹> rr | hash | bounded <pct>`를 추가한다(`upstream_conf_t.picker`, `bound_pct`). `upstream_pick_key(g, key, key_len, exclude, now_ms)`를 추가해 `X-Session-Id` 헤더를 키로 rendezvous hashing으로 고르고, bounded면 처리 중 수가 상한(평균 × pct/100 올림) 이상인 백엔드를 건너뛴다. 처리 중 수는 `upstream_acquire`~`upstream_release` 사이 연결 수로 센다. 기존 `upstream_pick`과 시그니처는 그대로 둔다. 재시도(`proxy_on_fail`)는 키를 모르므로 지금처럼 라운드로빈.
+- 대안: 모듈로 해싱(백엔드 수가 바뀌면 키 대부분이 옮겨 감), 링 consistent hashing(백엔드가 적어 가상 노드가 필요 없는 rendezvous로 충분), 요청 본문에서 키 추출(FR-LLM-09, 본문 파싱 필요).
+- 영향: `core/config.h`·`config.c`, `upstream/upstream.h`·`lb.c`·`pool.c`·`backend.c`·`internal_upstream.h`, `handler/proxy.c`. 기존 테스트 변화 없음. 검증은 bench 시나리오 C.

@@ -22,7 +22,10 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
                              proxy_job_t *out_job, response_plan_t *out_plan)
 {
     upstream_group_t *g = rt->upstream;
-    backend_t *b = upstream_pick(g, NULL, ctx->now_ms);
+    /* 고정 키: X-Session-Id (FR-LLM-08). 그룹 picker가 RR이면 키를 무시한다 */
+    const http_header_t *sid = http_header_get(&req->headers, "X-Session-Id");
+    backend_t *b = upstream_pick_key(g, sid != NULL ? sid->value.ptr : NULL,
+                                     sid != NULL ? sid->value.len : 0, NULL, ctx->now_ms);
     upstream_rewrite_t rw;
     size_t max = ctx->lim->max_head + (size_t)ctx->lim->max_body + PROXY_REQ_SLACK;
 
