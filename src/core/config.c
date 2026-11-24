@@ -336,7 +336,7 @@ static int parse_upstream(cfg_ctx_t *c, const str_t *tok, size_t n)
     return 0;
 }
 
-/* picker <그룹> rr | hash | bounded [<pct>]  (D-042 제안). 그룹은 먼저 정의되어 있어야 한다. */
+/* picker <그룹> rr | hash | bounded [<pct>]  (D-045 제안). 그룹은 먼저 정의되어 있어야 한다. */
 static int parse_picker(cfg_ctx_t *c, const str_t *tok, size_t n)
 {
     upstream_conf_t *u = NULL;
