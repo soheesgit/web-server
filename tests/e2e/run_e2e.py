@@ -49,6 +49,7 @@ def main():
     ap.add_argument("--bin", default=os.path.join(harness.REPO, "build", "httpd"))
     ap.add_argument("--pending", default=None)
     ap.add_argument("--only", default=None)
+    ap.add_argument("--engine", choices=("pool", "loop"))
     ap.add_argument("--list", action="store_true")
     ap.add_argument("-v", action="store_true", dest="verbose")
     args = ap.parse_args()
@@ -65,6 +66,7 @@ def main():
         return 0
 
     harness.BIN = os.path.abspath(args.bin)
+    harness.ENGINE = args.engine
     if not os.access(harness.BIN, os.X_OK):
         print(f"run_e2e: {harness.BIN} not found or not executable", file=sys.stderr)
         return 2

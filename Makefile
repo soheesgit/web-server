@@ -41,13 +41,14 @@ FMT_FILES := $(wildcard src/*/*.c src/*/*.h tests/unit/*.c tests/unit/*.h \
                         tests/unit/contract_min/*.c tests/fakes/*.c tests/fakes/*.h)
 
 ONLY_ARG := $(if $(ONLY),--only $(ONLY),)
+ENGINE_ARG := $(if $(ENGINE),--engine $(ENGINE),)
 
 .PHONY: all reverse-proxy unit e2e test lint asan clean
 
 all: $(BIN)
 
 reverse-proxy: $(BIN)
-	exec env HTTPD_PROXY_LB=least_requests "$(BIN)" -c "$(REVERSE_PROXY_CONF)"
+	exec env HTTPD_PROXY_LB=least_requests "$(BIN)" -c "$(REVERSE_PROXY_CONF)" $(if $(ENGINE),-e "$(ENGINE)",)
 
 $(BIN): $(LIB_OBJS) $(MAIN_OBJ)
 	@mkdir -p $(dir $@)
@@ -72,12 +73,12 @@ unit: $(UNIT_BIN)
 	$(UNIT_BIN) --pending $(PENDING) $(ONLY_ARG)
 
 e2e: $(BIN)
-	$(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG)
+	$(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG) $(ENGINE_ARG)
 
 # unit과 e2e를 모두 돌리고 두 요약 줄을 합친 줄을 마지막에 출력한다.
 test: $(BIN) $(UNIT_BIN)
 	@{ $(UNIT_BIN) --pending $(PENDING) $(ONLY_ARG); echo $$? > $(BUILD)/unit.rc; } | tee $(BUILD)/unit.log
-	@{ $(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG); \
+	@{ $(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG) $(ENGINE_ARG); \
 	   echo $$? > $(BUILD)/e2e.rc; } | tee $(BUILD)/e2e.log
 	@echo "=== unit + e2e ==="
 	@cat $(BUILD)/unit.log $(BUILD)/e2e.log | awk -F'[ :,]+' \
