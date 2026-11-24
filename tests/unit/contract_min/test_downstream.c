@@ -195,6 +195,17 @@ static void t_u_ds_30(void)
     CHECK_EQ_INT(buf_init(&out, 256, 8192), 0);
     CHECK_EQ_INT(response_write_head(&head, 1, (time_t)1700000000, &out), 0);
     CHECK_EQ_MEM(out.data, out.len, want, strlen(want));
+
+    const char *no_body = "HTTP/1.1 204 No Content\r\n"
+                          "Date: Tue, 14 Nov 2023 22:13:20 GMT\r\n"
+                          "Server: httpd/0.1\r\n"
+                          "\r\n";
+    buf_reset(&head.fields);
+    buf_reset(&out);
+    head.status = 204;
+    head.framing = (http_framing_t){FRAMING_CHUNKED, 0};
+    CHECK_EQ_INT(response_write_head(&head, 1, (time_t)1700000000, &out), 0);
+    CHECK_EQ_MEM(out.data, out.len, no_body, strlen(no_body));
     buf_cleanup(&out);
     buf_cleanup(&head.fields);
 }
@@ -365,7 +376,7 @@ void register_downstream_tests(void)
     test_register("U-DS-22", "uri_decode_path: %20 and UTF-8", t_u_ds_22);
     test_register("U-DS-27", "path_normalize: dot, double slash, dotdot", t_u_ds_27);
     test_register("U-DS-28", "path_normalize: escaping root fails", t_u_ds_28);
-    test_register("U-DS-30", "response_write_head: exact 200 head", t_u_ds_30);
+    test_register("U-DS-30", "response_write_head: exact 200 and empty 204 heads", t_u_ds_30);
     test_register("U-DS-36", "listener_open: port 0, nonblock, cloexec", t_u_ds_36);
     test_register("U-DS-40", "conn: one request, 200 ok, keep-alive", t_u_ds_40);
     test_register("U-DS-44", "conn: broken request, 400 + close", t_u_ds_44);

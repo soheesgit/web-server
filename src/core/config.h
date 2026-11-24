@@ -146,6 +146,7 @@ typedef struct {
     char upstream[CFG_NAME_MAX]; /* PROXY 대상 upstream 이름 (정의 확인됨). 그 밖에는 빈 문자열 */
     bool strip_prefix; /* PROXY: 전달 전에 prefix를 경로에서 뗀다 */
     bool keep_host;    /* PROXY: 원래 Host 유지 (false면 백엔드 host:port) */
+    unsigned line;     /* 설정 파일의 줄 번호. 0이면 파일에서 온 것이 아님 */
 } route_conf_t;
 
 /**

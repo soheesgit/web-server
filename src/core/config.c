@@ -268,6 +268,45 @@ static int parse_route(config_t *cfg, char **v, size_t n, size_t start, const ch
     return 0;
 }
 
+/* 지시어 이름이 하나라도 알려진 것인지 (값이 틀린 것과 이름이 틀린 것을 구분한다). */
+static bool directive_known(const char *name)
+{
+    static const char *const names[] = {"listen",
+                                        "root",
+                                        "engine",
+                                        "upstream",
+                                        "route",
+                                        "host",
+                                        "access_log",
+                                        "error_log",
+                                        "backlog",
+                                        "workers",
+                                        "queue_len",
+                                        "header_timeout_ms",
+                                        "body_timeout_ms",
+                                        "keepalive_timeout_ms",
+                                        "max_keepalive_requests",
+                                        "cgi_timeout_ms",
+                                        "upstream_connect_timeout_ms",
+                                        "upstream_response_timeout_ms",
+                                        "backend_fail_threshold",
+                                        "backend_cooldown_ms",
+                                        "pool_max_idle",
+                                        "shutdown_grace_ms",
+                                        "cache_max_bytes",
+                                        "cache_entry_max",
+                                        "max_head",
+                                        "max_uri",
+                                        "max_headers",
+                                        "max_body",
+                                        "cgi_max_head"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (strcmp(name, names[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
 static int parse_line(config_t *cfg, char **v, size_t n)
 {
     if (n == 0)
@@ -328,7 +367,7 @@ static int parse_line(config_t *cfg, char **v, size_t n)
         if (errno == EINVAL || errno == ERANGE)
             return -1;
     }
-    errno = EINVAL;
+    errno = directive_known(v[0]) ? EINVAL : ENOSYS; /* ENOSYS: 이름 자체를 모름 */
     return -1;
 }
 
@@ -339,6 +378,8 @@ static int read_config(config_t *cfg, const char *path, char *err, size_t errcap
     size_t cap = 0;
     ssize_t got;
     size_t lineno = 0;
+    size_t routes_before;
+    int prc, perr;
     int result = 0;
     if (f == NULL)
         return -1;
@@ -370,11 +411,21 @@ static int read_config(config_t *cfg, const char *path, char *err, size_t errcap
             if (*p != '\0')
                 *p++ = '\0';
         }
-        if (n > 0 && parse_line(cfg, v, n) != 0) {
+        routes_before = cfg->n_routes;
+        prc = 0;
+        perr = 0;
+        if (n > 0) {
+            prc = parse_line(cfg, v, n);
+            perr = errno;
+        }
+        if (prc == 0 && cfg->n_routes > routes_before)
+            cfg->routes[cfg->n_routes - 1].line = (unsigned)lineno;
+        if (prc != 0) {
             char detail[160];
             (void)snprintf(detail, sizeof(detail), "%s", v[0]);
             if (err != NULL && errcap > 0)
-                (void)snprintf(err, errcap, "%s:%zu: invalid directive '%s'", path, lineno, detail);
+                (void)snprintf(err, errcap, "%s:%zu: %s directive '%s'", path, lineno,
+                               perr == ENOSYS ? "unknown" : "invalid", detail);
             errno = EINVAL;
             result = -1;
             break;
@@ -387,7 +438,7 @@ static int read_config(config_t *cfg, const char *path, char *err, size_t errcap
     return result;
 }
 
-static int validate_config(config_t *cfg, char *err, size_t errcap)
+static int validate_config(config_t *cfg, const char *conf_path, char *err, size_t errcap)
 {
     struct stat st;
     size_t i, j;
@@ -410,7 +461,11 @@ static int validate_config(config_t *cfg, char *err, size_t errcap)
                     break;
             }
             if (j == cfg->n_upstreams) {
-                set_error(err, errcap, "route: undefined upstream: %s", r->upstream, NULL);
+                if (conf_path != NULL && r->line != 0 && err != NULL && errcap > 0)
+                    (void)snprintf(err, errcap, "%s:%u: undefined upstream '%s'", conf_path,
+                                   r->line, r->upstream);
+                else
+                    set_error(err, errcap, "route: undefined upstream: %s", r->upstream, NULL);
                 errno = EINVAL;
                 return -1;
             }
@@ -512,7 +567,7 @@ int config_load(int argc, char **argv, config_t *out_cfg, char *err, size_t errc
         return -1;
     if (apply_cli(&cfg, argc, argv, err, errcap) != 0)
         return -1;
-    if (validate_config(&cfg, err, errcap) != 0)
+    if (validate_config(&cfg, config_path, err, errcap) != 0)
         return -1;
     *out_cfg = cfg;
     return 0;

@@ -421,6 +421,17 @@ def r22():
     expect_eq((r.status, r.body), (200, b"ok"), "response")
 
 
+@test("R-26", "binary start line over the head limit is closed without a response")
+def r26():
+    with site() as s:
+        out = raw(s.port, b"\x00" * 9000 + b"\r\n\r\n", timeout=3)
+        expect_eq(out, b"", "bytes sent back")
+        out = raw(s.port, b"GET /" + b"a" * 9000 + b" HTTP/1.1\r\nHost: a\r\n\r\n", timeout=3)
+        expect(out.startswith(b"HTTP/1.1 414"), f"text start line still gets 414: {out[:30]!r}")
+        r = harness.request(s.port, "GET", "/index.html")
+        expect_eq(r.status, 200, "server still answers")
+
+
 # ── 동시성과 끊김 ─────────────────────────────────────────────────────────────
 
 @test("R-23", "32 concurrent keep-alive clients get their own bytes (static + CGI)")

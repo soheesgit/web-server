@@ -106,6 +106,7 @@ int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
     bool has_cl = false;
     bool have_length = false;
     bool last_is_chunked = false;
+    bool chunked_seen = false;
     uint64_t length = 0;
     size_t coding_count = 0;
 
@@ -137,8 +138,19 @@ int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
                 size_t semi;
                 str_t coding;
                 str_t base;
-                while (end < v.len && v.ptr[end] != ',') {
+                bool in_quote = false;
+                /* 따옴표 안의 쉼표와 \x 이스케이프는 목록 구분자가 아니다. */
+                while (end < v.len && (in_quote || v.ptr[end] != ',')) {
+                    if (in_quote && v.ptr[end] == '\\' && end + 1 < v.len) {
+                        end++;
+                    } else if (v.ptr[end] == '"') {
+                        in_quote = !in_quote;
+                    }
                     end++;
+                }
+                if (in_quote) { /* 닫히지 않은 따옴표 */
+                    *out_status = is_response ? 502 : 400;
+                    return -1;
                 }
                 coding.ptr = v.ptr == NULL ? NULL : v.ptr + pos;
                 coding.len = end - pos;
@@ -170,6 +182,12 @@ int http_resolve_framing(const http_headers_t *h, bool is_response, int status,
                         }
                     }
                 }
+                /* chunked를 두 번 적용하는 목록은 경계가 모호해 거부한다. */
+                if (equals_ci(base, "chunked") && chunked_seen) {
+                    *out_status = is_response ? 502 : 400;
+                    return -1;
+                }
+                chunked_seen = chunked_seen || equals_ci(base, "chunked");
                 coding_count++;
                 last_is_chunked = equals_ci(base, "chunked") && semi == coding.len;
                 if (end == v.len) {
@@ -301,7 +319,9 @@ http_body_result_t http_body_track(http_body_tracker_t *t, const char *p, size_t
         return BODY_ERROR;                                                                         \
     } while (0)
     /* state는 분할 입력 사이에 유지된다:
-     * 0=크기 시작, 101~116=16진 숫자 수, 1=확장, 2=크기 CR,
+     * 0=크기 시작, 101~116=16진 숫자 수, 2=크기 CR,
+     * 1=확장 이름 시작, 21=확장 이름, 27=이름 뒤 공백, 22=확장 값 시작,
+     * 23=토큰 값, 24=따옴표 값, 26=따옴표 안 이스케이프, 25=값 뒤 공백,
      * 3=데이터, 4/9=데이터 뒤 줄끝, 5=트레일러 시작, 6=이름,
      * 7=값, 11/12=트레일러 CR, 10=완료.
      */
@@ -334,14 +354,67 @@ http_body_result_t http_body_track(http_body_tracker_t *t, const char *p, size_t
             } else {
                 BODY_ERROR_AT_CURSOR();
             }
-        } else if (phase == 1) { /* chunk extension */
-            if (c == '\r') {
+        } else if (phase == 1) { /* ';' 뒤: 확장 이름이 반드시 와야 한다 (빈 확장 거부) */
+            if (c == ' ' || c == '\t') {
+                /* 앞쪽 공백(BWS)은 건너뛴다. */
+            } else if (trailer_tchar(c)) {
+                t->state = 21;
+            } else {
+                BODY_ERROR_AT_CURSOR();
+            }
+        } else if (phase == 21 || phase == 23) { /* 확장 이름 또는 토큰 값 */
+            if (trailer_tchar(c)) {
+                /* 같은 상태 유지 */
+            } else if (c == '=' && phase == 21) {
+                t->state = 22;
+            } else if (c == ';') {
+                t->state = 1;
+            } else if (c == ' ' || c == '\t') {
+                t->state = phase == 21 ? 27 : 25;
+            } else if (c == '\r') {
                 t->state = 2;
             } else if (c == '\n') {
                 t->state = t->remaining == 0 ? 5 : 3;
+            } else {
+                BODY_ERROR_AT_CURSOR();
+            }
+        } else if (phase == 27 || phase == 25) { /* 이름(27) 또는 값(25) 뒤 공백 */
+            if (c == ' ' || c == '\t') {
+                /* 유지 */
+            } else if (c == '=' && phase == 27) {
+                t->state = 22;
+            } else if (c == ';') {
+                t->state = 1;
+            } else if (c == '\r') {
+                t->state = 2;
+            } else if (c == '\n') {
+                t->state = t->remaining == 0 ? 5 : 3;
+            } else {
+                BODY_ERROR_AT_CURSOR();
+            }
+        } else if (phase == 22) { /* '=' 뒤: 값이 반드시 와야 한다 (빈 값 거부) */
+            if (c == ' ' || c == '\t') {
+                /* 유지 */
+            } else if (c == '"') {
+                t->state = 24;
+            } else if (trailer_tchar(c)) {
+                t->state = 23;
+            } else {
+                BODY_ERROR_AT_CURSOR();
+            }
+        } else if (phase == 24) { /* 따옴표 값 */
+            if (c == '"') {
+                t->state = 25;
+            } else if (c == '\\') {
+                t->state = 26;
             } else if ((c < 0x20 && c != '\t') || c == 0x7f) {
                 BODY_ERROR_AT_CURSOR();
             }
+        } else if (phase == 26) { /* quoted-pair: 제어 문자만 거부 */
+            if ((c < 0x20 && c != '\t') || c == 0x7f) {
+                BODY_ERROR_AT_CURSOR();
+            }
+            t->state = 24;
         } else if (phase == 2) { /* 크기 줄 CR 다음 LF */
             if (c != '\n') {
                 BODY_ERROR_AT_CURSOR();

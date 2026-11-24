@@ -1405,6 +1405,21 @@ void conn_free(conn_t *c)
 }
 
 /* 역할: 클라이언트에서 한 번 읽어 rbuf에 붙이고 EOF/상한/오류를 구분한다. */
+/* 머리 한도를 넘긴 시작 줄에 NUL이 있으면 HTTP가 아닌 접속(TLS 핸드셰이크 등)으로 보고 응답 없이
+ * 닫는다. */
+static bool binary_start_line_over_limit(const conn_t *c)
+{
+    const char *lf;
+    size_t first;
+
+    if (c->rbuf.len <= c->env.lim->max_head) {
+        return false;
+    }
+    lf = memchr(c->rbuf.data, '\n', c->rbuf.len);
+    first = lf != NULL ? (size_t)(lf - c->rbuf.data) : c->rbuf.len;
+    return memchr(c->rbuf.data, '\0', first) != NULL;
+}
+
 static ssize_t read_client_once(conn_t *c)
 {
     /* core 버퍼 함수로 소켓에서 한 번 읽는다. 버퍼 상한 도달은 별도 값 -2로 구분한다. */
@@ -1467,6 +1482,10 @@ conn_status_t conn_on_event(conn_t *c, int fd, unsigned events, int64_t now_ms)
         /* 읽은 바이트로 요청 머리를 파싱한다. DONE 전에는 라우터나 처리기를 호출하지 않는다. */
         parsed = request_parse_head(c->rbuf.data, c->rbuf.len, c->env.lim, &c->req, &status);
         if (parsed == HTTP_PARSE_ERROR) {
+            if (binary_start_line_over_limit(c)) {
+                c->phase = CONN_FINISHED;
+                return CONN_CLOSE;
+            }
             if (set_error_plan(c, status, true) != 0) {
                 c->phase = CONN_FINISHED;
                 return CONN_CLOSE;

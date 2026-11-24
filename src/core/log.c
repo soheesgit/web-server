@@ -201,8 +201,34 @@ void log_msg(log_level_t lvl, const char *fmt, ...)
     while (suffix_len > 0 && line[prefix_len + suffix_len - 1] == '\n') {
         suffix_len--;
     }
-    line[prefix_len + suffix_len] = '\n';
-    (void)write_line(error_fd, line, (size_t)prefix_len + (size_t)suffix_len + 1);
+    {
+        /* 본문 중간의 CR/LF는 로그 줄을 위조할 수 있어 \xHH로 바꾼다. 끝의 줄바꿈은 위에서 뺐다. */
+        static const char hex[] = "0123456789ABCDEF";
+        size_t nesc = 0, i, pos = (size_t)prefix_len;
+        char *out;
+        for (i = 0; i < (size_t)suffix_len; i++) {
+            char c = line[(size_t)prefix_len + i];
+            nesc += (c == '\r' || c == '\n') ? 1 : 0;
+        }
+        out = malloc((size_t)prefix_len + (size_t)suffix_len + nesc * 3 + 2);
+        if (out != NULL) {
+            memcpy(out, line, (size_t)prefix_len);
+            for (i = 0; i < (size_t)suffix_len; i++) {
+                unsigned char c = (unsigned char)line[(size_t)prefix_len + i];
+                if (c == '\r' || c == '\n') {
+                    out[pos++] = '\\';
+                    out[pos++] = 'x';
+                    out[pos++] = hex[c >> 4];
+                    out[pos++] = hex[c & 0x0f];
+                } else {
+                    out[pos++] = (char)c;
+                }
+            }
+            out[pos++] = '\n';
+            (void)write_line(error_fd, out, pos);
+            free(out);
+        }
+    }
     free(line);
     pthread_mutex_unlock(&log_lock);
 }

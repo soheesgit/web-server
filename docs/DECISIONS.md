@@ -339,3 +339,11 @@
 - 결정: 반복을 `CONN_READS_PER_EVENT`(8)번 + 1번으로 하고, 마지막 한 번은 `events`에서 `EV_READ`를 빼서 읽지 않고 파싱만 한다. 요청이 완성돼 있으면 처리하고, 아니면 `CONN_WANT_READ`를 돌려준다 (커널에 데이터가 남았다면 레벨 트리거로 다음 이벤트가 온다).
 - 대안: 반복 상한을 없애 EAGAIN까지 읽기 (한 연결이 큰 업로드로 루프를 오래 점유), 8번 읽은 뒤 스스로 다시 이벤트를 만들기 (engine에 새 인터페이스 필요).
 - 영향: `src/downstream/conn.c`. 회귀 테스트 `tests/robust` R-25 (수정 전 loop 3/3 실패, 수정 후 pool·loop 모두 통과).
+
+## D-045 develop의 계약 테스트가 요구하는 동작을 이 구현에도 맞춘다
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: `origin/develop`은 core, common, downstream을 별도로 구현해 병합했고 단위 테스트 5개(U-COM-21, U-COM-33, U-CORE-19, U-CORE-26, U-CORE-31)를 추가했다. 이 구현을 그 테스트에 돌리자 5개가 실패했다.
+- 결정: 구현을 바꾸지 않고 실패한 동작만 맞춘다. (1) `Transfer-Encoding`에서 `chunked`가 두 번 나오면 거부하고, 따옴표 안의 쉼표로 목록을 나누지 않는다. (2) chunk extension은 `;이름[=토큰|따옴표 문자열]` 문법을 지키고 빈 확장·빈 값을 거부한다. (3) 설정 오류는 `파일:줄: undefined upstream '이름'`, `파일:줄: unknown directive '이름'` 형식이다 (`route_conf_t.line` 추가). (4) 오류 로그 본문의 CR/LF는 `\xHH`로 바꾼다. (5) Linux `sendfile`이 만드는 `SIGPIPE`는 호출 동안 이 스레드에서 막고 `sigtimedwait`로 거둔다. 추가로 develop의 `D-035`에 맞춰, 머리 한도(`max_head`)를 넘긴 시작 줄에 NUL이 있으면 응답 없이 닫는다 (R-26).
+- 대안: develop 구현으로 교체 (v2 엔진, 포워드 프록시, 캐시와 맞물린 부분을 다시 맞춰야 함).
+- 영향: `src/common/http_framing.c`, `src/core/config.{c,h}`, `src/core/log.c`, `src/core/platform.c`, `src/downstream/conn.c`. develop의 단위 테스트 5개 통과. macOS 경로는 확인하지 않았다.

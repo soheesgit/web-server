@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <sys/resource.h>
@@ -92,10 +93,31 @@ ssize_t platform_sendfile(int out_fd, int in_fd, off_t *inout_off, size_t count)
     }
 #if defined(__linux__)
     {
+        /* sendfile에는 MSG_NOSIGNAL이 없다. 이 스레드에서 SIGPIPE를 잠시 막고, 호출이 만든
+         * SIGPIPE는 sigtimedwait로 거둬 프로세스에 전달되지 않게 한다. 일부를 보낸 뒤 끊기면
+         * 반환값이 양수여도 SIGPIPE가 대기 중일 수 있어 반환값으로 판단하지 않는다. */
+        sigset_t pipe_set, old_set, pending;
+        struct timespec zero = {0, 0};
+        int was_pending;
+        int saved;
         ssize_t n;
+
+        (void)sigemptyset(&pipe_set);
+        (void)sigaddset(&pipe_set, SIGPIPE);
+        (void)pthread_sigmask(SIG_BLOCK, &pipe_set, &old_set);
+        (void)sigemptyset(&pending);
+        (void)sigpending(&pending);
+        was_pending = sigismember(&pending, SIGPIPE) == 1;
         do {
             n = sendfile(out_fd, in_fd, inout_off, count);
         } while (n < 0 && errno == EINTR);
+        saved = errno;
+        (void)sigemptyset(&pending);
+        if (!was_pending && sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1) {
+            (void)sigtimedwait(&pipe_set, NULL, &zero);
+        }
+        (void)pthread_sigmask(SIG_SETMASK, &old_set, NULL);
+        errno = saved;
         return n;
     }
 #elif defined(__APPLE__)
