@@ -18,8 +18,6 @@ U-DS-44
 # --- U-US --- 계약 최소셋: upstream
 
 # --- U-EN --- 계약 최소셋: engine
-U-EN-01
-U-EN-02
 U-EN-05
 
 # --- E-ST --- 기능: 정적 파일 (E-ST-12는 선택, D-006)
