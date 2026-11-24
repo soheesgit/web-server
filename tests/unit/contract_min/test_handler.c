@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -140,6 +141,7 @@ static void t_u_hd_09(void)
     CHECK(fields_has(&p, "Content-Type: text/html; charset=utf-8\r\n"));
     CHECK(fields_has(&p, "Last-Modified: "));
     plan_cleanup(&p);
+    free(cfg);
 }
 
 static void t_u_hd_11(void)
@@ -160,6 +162,7 @@ static void t_u_hd_11(void)
     CHECK_EQ_INT(p.head.status, 405);
     CHECK(fields_has(&p, "Allow: GET, HEAD\r\n"));
     plan_cleanup(&p);
+    free(cfg);
 }
 
 static void t_u_hd_14(void)
@@ -184,6 +187,29 @@ static void t_u_hd_14(void)
     CHECK_EQ_INT(static_handle(&req, &rt, &ctx, &p), HANDLER_DONE);
     CHECK_EQ_INT(p.head.status, 403);
     plan_cleanup(&p);
+    free(cfg);
+}
+
+static void t_u_hd_19(void)
+{
+    config_t *cfg = fake_config();
+    http_request_t req;
+    response_plan_t plan;
+
+    CHECK(cfg != NULL);
+    CHECK_EQ_INT(test_write_file(cfg->root, "index.html", "x", 1, 0644), 0);
+    route_t route = static_route(cfg->root);
+    handler_ctx_t ctx = make_ctx(cfg);
+    fake_request(&req, HTTP_GET, "/index.html", "t");
+    fake_request_add_header(&req, "If-Modified-Since", "Fri, 01 Jan 2100 00:00:00 GMT");
+    new_plan(&plan);
+    CHECK_EQ_INT(static_handle(&req, &route, &ctx, &plan), HANDLER_DONE);
+    CHECK_EQ_INT(plan.head.status, 304);
+    CHECK_EQ_INT(plan.kind, BODY_NONE);
+    CHECK_EQ_INT(plan.head.framing.kind, FRAMING_NONE);
+    CHECK(fields_has(&plan, "Last-Modified: "));
+    plan_cleanup(&plan);
+    free(cfg);
 }
 
 static void t_u_hd_21(void)
@@ -230,6 +256,7 @@ static void t_u_hd_21(void)
     CHECK(strstr(out, "REQUEST_METHOD=GET") != NULL);
     CHECK(strstr(out, "QUERY_STRING=a=1") != NULL);
     plan_cleanup(&p);
+    free(cfg);
 }
 
 static void t_u_hd_26(void)
@@ -242,6 +269,13 @@ static void t_u_hd_26(void)
     memset(&h, 0, sizeof(h));
     CHECK_EQ_INT(cgi_parse_head(p, strlen(p), 8192, &h, &used, &st), HTTP_PARSE_DONE);
     CHECK_EQ_INT(used, 26);
+    CHECK_EQ_INT(h.status, 200);
+    CHECK(mem_has(h.fields.data, h.fields.len, "Content-Type: text/plain\r\n"));
+
+    const char *invalid_length = "Content-Length: invalid\n\n";
+    CHECK_EQ_INT(cgi_parse_head(invalid_length, strlen(invalid_length), 8192, &h, &used, &st),
+                 HTTP_PARSE_ERROR);
+    CHECK_EQ_INT(st, 502);
     CHECK_EQ_INT(h.status, 200);
     CHECK(mem_has(h.fields.data, h.fields.len, "Content-Type: text/plain\r\n"));
     buf_cleanup(&h.fields);
@@ -427,8 +461,9 @@ void register_handler_tests(void)
     test_register("U-HD-09", "static_handle: GET /index.html", t_u_hd_09);
     test_register("U-HD-11", "static_handle: POST is 405 with Allow", t_u_hd_11);
     test_register("U-HD-14", "static_handle: symlink escaping root is 403", t_u_hd_14);
+    test_register("U-HD-19", "static_handle: If-Modified-Since returns 304", t_u_hd_19);
     test_register("U-HD-21", "cgi_handle: GET with query starts the script", t_u_hd_21);
-    test_register("U-HD-26", "cgi_parse_head: LF-only head", t_u_hd_26);
+    test_register("U-HD-26", "cgi_parse_head: LF-only head and malformed length", t_u_hd_26);
     test_register("U-PX-01", "proxy_begin: origin-form upstream request", t_u_px_01);
     test_register("U-PX-05", "proxy_on_fail: CONNECT retries another backend", t_u_px_05);
     test_register("U-PX-07", "proxy_on_fail: SEND after bytes, GET retry / POST 502", t_u_px_07);

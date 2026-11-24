@@ -30,12 +30,15 @@
 | --- | --- |
 | 현재(기능) | E-ST-01~12, E-CG-01~10, E-PX-01~17 (판단 부분) |
 | 현재(계약 최소셋) | U-HD-02, 04, 09, 11, 14, 21, 26 · U-PX-01, 05, 07, 10 |
+| 추가 계약 테스트 | U-HD-19 (조건부 304) |
 | 추후 | U-HD-01~30, U-PX-01~15 중 나머지 |
 
 ## 구현 단계
 3단계 STATIC·CGI: B `cgi` · C `plan`, `static`, `mime`. 4단계 PROXY: B `proxy`.
-- [ ] plan (+ handler_dispatch)
-- [ ] mime
-- [ ] static
-- [ ] cgi
+- [x] plan (+ handler_dispatch)
+- [x] mime
+- [x] static
+- [x] cgi
 - [ ] proxy
+
+빈 응답 계획에서 본문 자원을 초기화하는 기준은 D-039, CGI 응답의 길이와 상태 검사 기준은 D-040을 따른다.
