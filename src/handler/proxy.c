@@ -15,7 +15,11 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
                              proxy_job_t *out_job, response_plan_t *out_plan)
 {
     *out_job = (proxy_job_t){0};
-    backend_t *b = upstream_pick(rt->upstream, NULL, ctx->now_ms);
+    /* AI 라우팅: picker 줄이 있는 그룹은 X-Session-Id를 고정 키로 고른다 (D-045).
+     * 그 밖의 그룹과 키 없는 요청은 upstream_pick과 같다 */
+    const http_header_t *sid = http_header_get(&req->headers, "X-Session-Id");
+    backend_t *b = upstream_pick_key(rt->upstream, sid != NULL ? sid->value.ptr : NULL,
+                                     sid != NULL ? sid->value.len : 0, NULL, ctx->now_ms);
     if (b == NULL) {
         (void)plan_error(out_plan, 503);
         return HANDLER_DONE;
