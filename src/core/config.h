@@ -25,7 +25,7 @@
  *              / "engine" WS ( "pool" / "loop" )
  *              / "workers" WS uint
  *              / "upstream" WS name 1*( WS hostport )
- *              / "picker" WS name WS ( "rr" / "hash" / "bounded" [ WS uint ] )   ; D-042 (제안)
+ *              / "picker" WS name WS ( "rr" / "hash" / "bounded" [ WS uint ] )   ; D-045 (제안)
  *              / route
  *              / "host" WS hostname WS route
  *              / knob WS uint
@@ -70,7 +70,7 @@
 #define CFG_HOST_MAX 256    /* 호스트 이름 버퍼 크기 (NUL 포함) */
 #define CFG_PATH_MAX 4096   /* 경로·prefix 버퍼 크기 (NUL 포함) */
 
-#define CFG_BOUND_PCT_DEFAULT 200 /* "picker <그룹> bounded"에서 pct를 생략했을 때 (D-042) */
+#define CFG_BOUND_PCT_DEFAULT 200 /* "picker <그룹> bounded"에서 pct를 생략했을 때 (D-045) */
 
 /**
  * route의 처리 방식.
@@ -113,7 +113,7 @@ typedef struct {
 } backend_conf_t;
 
 /**
- * 그룹 안에서 백엔드를 고르는 방식 (picker 지시어, D-042 제안).
+ * 그룹 안에서 백엔드를 고르는 방식 (picker 지시어, D-045 제안).
  *
  * 생성:   config_defaults(RR), picker 지시어
  * 소멸:   없음

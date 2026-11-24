@@ -353,3 +353,26 @@
 - 결정: HTTP/1.1 프록시는 공용 추적기로 청크를 검증한 뒤 데이터만 정규 CRLF 청크로 송신한다. 확장과 트레일러는 검증하되 중계하지 않고 메타데이터 크기는 응답 머리 상한으로 제한한다. 본문 중 오류에는 마지막 청크를 보내지 않는다. HTTP/1.0 청크 응답은 D-034에 따라 머리 전 502를 사용한다.
 - 대안: 원본 청크와 트레일러 중계.
 - 영향: `downstream/conn.c`, `upstream/response_parser.c`, E-PX-05, E-PX-12 및 프레이밍 회귀 스크립트.
+
+## D-045 AI 라우팅: 그룹별 picker와 고정 키 해싱
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: LLM 벤치(`bench/`)에서 라운드로빈은 요청 수는 고르게 나누지만, 같은 대화가 매번 다른 백엔드로 가서 prefix 캐시를 살리지 못한다(보정: 캐시 적중 시 prefill 약 99% 감소). 기획서 FR-LB-01·03, FR-LLM-08.
+- 결정: 설정에 `picker <그룹> rr | hash | bounded [<pct>]`를 추가한다(`upstream_conf_t.picker`, `bound_pct`). `upstream_pick_key(g, key, key_len, exclude, now_ms)`를 새 파일 `upstream/lb_key.c`에 추가해 `X-Session-Id` 헤더를 키로 rendezvous hashing으로 고르고(키는 `proxy_job_t.affinity_key`로 relay까지 전달해 첫 시도의 연결 예약 때 쓴다), bounded면 처리 중 수가 상한(평균 × pct/100 올림) 이상인 백엔드를 건너뛴다. 처리 중 수는 기존 `backend.active`(연결 예약~반납)를 그대로 쓴다. 일반 프록시의 선택(`lb.c`, D-041~D-043의 rr·least_requests·p2c)은 바꾸지 않고, picker 줄이 있는 그룹만 이 경로를 탄다(수평 확장). 재시도(`proxy_on_fail`)는 키를 모르므로 기존 경로 그대로.
+- 대안: 모듈로 해싱(백엔드 수가 바뀌면 키 대부분이 옮겨 감), 링 consistent hashing(백엔드가 적어 가상 노드가 필요 없는 rendezvous로 충분), 요청 본문에서 키 추출(FR-LLM-09, 본문 파싱 필요).
+- 영향: `core/config.h`·`config.c`, `common/types.h`(`proxy_job_t.affinity_key`), `upstream/upstream.h`·`lb_key.c`(새 파일)·`internal_state.h`(그룹 필드 2개)·`backend.c`(필드 채움)·`relay.c`(첫 시도 선택), `downstream/conn.c`(키 채움), `handler/proxy.c`. 기존 테스트 변화 없음. 검증은 bench 시나리오 C.
+- 기본 pct: `bounded`만 쓰면 200(`CFG_BOUND_PCT_DEFAULT`). 기본 picker는 계속 rr.
+- 근거 (2026-11-24, bench 시나리오 C, 백엔드 4대, 0.3 req/s, 대화 8개, 240초 × 3회, 이벤트 루프):
+  | 분포 | picker | TTFT p50 | TTFT p99 | 캐시 적중 | 넘침 |
+  | --- | --- | --- | --- | --- | --- |
+  | 균등 | rr | 3.8초 | 11.7초 | 31% | 80% |
+  | 균등 | hash | 1.8초 | 10.4초 (8.2~20.7) | 62% | 0% |
+  | 균등 | bounded 125 / 150 / 200 | 3.8 / 1.8 / 1.8초 | 15.1 / 14.6 / 12.9초 | 48 / 53 / 54% | 29 / 21 / 15% |
+  | Zipf 1.0 | rr | 3.8초 | 12.2초 | 27% | 75% |
+  | Zipf 1.0 | hash | 3.8초 | 29.1초 | 58% | 0% |
+  | Zipf 1.0 | bounded 125 / 150 / 200 | 3.8 / 3.8 / 3.2초 | 13.8 / 15.3 / 19.5초 | 36 / 39 / 45% | 39 / 31 / 19% |
+  - hash는 키가 적거나 치우치면 한 백엔드에 몰려(최대 동시 8, 슬롯 4) p99가 rr의 2.4배가 된다.
+  - bounded는 상한이 낮으면(125) 한가할 때 올림 때문에 상한이 1이 되어 자주 넘기고 캐시를 잃는다. 200에서 넘침이 가장 적고 균등 분포 p50이 hash와 같다.
+  - p99는 rr보다 낫다고 할 수 없다 (실행당 요청 약 55개라 p99 ≈ 최댓값, 3회 편차 큼). 처리 능력 탐색(속도마다 1회)에서는 1.2 req/s에서 bounded 125가 완료 0.44 req/s로 rr 0.31·hash 0.39보다 높았다.
+  - fake_llm의 처리 시간은 Ollama llama3.2:1b(M4)로 보정한 입력값이라 절대값이 아니라 상대 비교다.
+  - 위 수치는 통합 전 용민 구현(4단계·이벤트 루프, #45) 위에서 쟀다. 선택 규칙과 상한 계산은 같고 처리 중 수를 세는 시점(연결 예약~반납)도 같지만, 통합본에서는 다시 재지 않았다.
