@@ -177,8 +177,80 @@ def load_test(binary, engine, conns, seconds, procs):
         proc.wait(timeout=10)
 
 
+def proc_status(pid):
+    """/proc/<pid>의 (RSS KB, 스레드 수, 열린 fd 수). Linux에서만 의미가 있다."""
+    rss = threads = 0
+    with open(f"/proc/{pid}/status") as f:
+        for line in f:
+            if line.startswith("VmRSS:"):
+                rss = int(line.split()[1])
+            elif line.startswith("Threads:"):
+                threads = int(line.split()[1])
+    return rss, threads, len(os.listdir(f"/proc/{pid}/fd"))
+
+
+def mem_test(binary, engine, idle):
+    """유휴 연결 K개가 붙었을 때와 붙기 전의 서버 자원: (RSS KB, 스레드, fd) 둘."""
+    port = free_port()
+    proc = start_server(binary, engine, port)
+    holders = []
+    try:
+        time.sleep(0.3)
+        before = proc_status(proc.pid)
+        for _ in range(idle):
+            holders.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+        time.sleep(1.0)  # 헤더 마감(기본 10초) 전에 잰다
+        return before, proc_status(proc.pid)
+    finally:
+        for h in holders:
+            h.close()
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def download_test(binary, engine, conns):
+    """/big.bin(100MiB)을 동시에 conns개 받는다. 합계 MB/s와 받은 바이트가 맞는지."""
+    import threading
+    port = free_port()
+    proc = start_server(binary, engine, port)
+    got = [0] * conns
+    want = [0] * conns
+
+    def one(i):
+        s = socket.create_connection(("127.0.0.1", port), timeout=60)
+        s.sendall(b"GET /big.bin HTTP/1.1\r\nHost: bench\r\nConnection: close\r\n\r\n")
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            buf += s.recv(65536)
+        head, _, rest = buf.partition(b"\r\n\r\n")
+        m = CL_RE.search(head)
+        want[i] = int(m.group(1)) if m else -1
+        got[i] = len(rest)
+        while True:
+            chunk = s.recv(1 << 20)
+            if not chunk:
+                break
+            got[i] += len(chunk)
+        s.close()
+
+    try:
+        t0 = time.monotonic()
+        ths = [threading.Thread(target=one, args=(i,)) for i in range(conns)]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join()
+        secs = time.monotonic() - t0
+        return sum(got) / secs / 1e6, all(g == w for g, w in zip(got, want)), secs
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--mem", default="", help="실험 3: 유휴 연결 수 목록 (예 0,100,1000)")
+    ap.add_argument("--dl", default="", help="실험 4: 동시 다운로드 수 목록 (예 1,8)")
     ap.add_argument("--bin", default=os.path.join(REPO, "build", "httpd"))
     ap.add_argument("--idle", default="0,100,1000")
     ap.add_argument("--probes", type=int, default=5)
@@ -187,6 +259,27 @@ def main():
     ap.add_argument("--seconds", type=float, default=5.0)
     ap.add_argument("--procs", type=int, default=4)
     a = ap.parse_args()
+
+    if a.mem or a.dl:
+        if a.mem:
+            print("## 실험 3 mem: 유휴 연결 K개가 붙었을 때 서버 자원 (Linux /proc)")
+            print("| 엔진 | 유휴 K | RSS KB (전 → 후) | 스레드 (전 → 후) | fd (전 → 후) |")
+            print("|---|---|---|---|---|")
+            for k in [int(x) for x in a.mem.split(",")]:
+                for engine in ("pool", "loop"):
+                    b, f = mem_test(a.bin, engine, k)
+                    print(f"| {engine} | {k} | {b[0]} → {f[0]} | {b[1]} → {f[1]} | {b[2]} → {f[2]} |",
+                          flush=True)
+        if a.dl:
+            print("\n## 실험 4 dl: /big.bin(100MiB) 동시 다운로드")
+            print("| 엔진 | 동시 | 합계 MB/s | 걸린 초 | 바이트 일치 |")
+            print("|---|---|---|---|---|")
+            for c in [int(x) for x in a.dl.split(",")]:
+                for engine in ("pool", "loop"):
+                    mbs, ok, secs = download_test(a.bin, engine, c)
+                    print(f"| {engine} | {c} | {mbs:,.0f} | {secs:.2f} | {'예' if ok else '아니오'} |",
+                          flush=True)
+        return
 
     print("## 실험 1 idle: 유휴 연결 K개가 붙어 있을 때 새 GET의 응답 시간")
     print("| 엔진 | 유휴 K | 응답 시간 ms (중앙값 / 최대) | 상태 |")
