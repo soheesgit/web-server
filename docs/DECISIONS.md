@@ -333,3 +333,17 @@
 - 결정: 설정에 `picker <그룹> rr | hash | bounded <pct>`를 추가한다(`upstream_conf_t.picker`, `bound_pct`). `upstream_pick_key(g, key, key_len, exclude, now_ms)`를 추가해 `X-Session-Id` 헤더를 키로 rendezvous hashing으로 고르고, bounded면 처리 중 수가 상한(평균 × pct/100 올림) 이상인 백엔드를 건너뛴다. 처리 중 수는 `upstream_acquire`~`upstream_release` 사이 연결 수로 센다. 기존 `upstream_pick`과 시그니처는 그대로 둔다. 재시도(`proxy_on_fail`)는 키를 모르므로 지금처럼 라운드로빈.
 - 대안: 모듈로 해싱(백엔드 수가 바뀌면 키 대부분이 옮겨 감), 링 consistent hashing(백엔드가 적어 가상 노드가 필요 없는 rendezvous로 충분), 요청 본문에서 키 추출(FR-LLM-09, 본문 파싱 필요).
 - 영향: `core/config.h`·`config.c`, `upstream/upstream.h`·`lb.c`·`pool.c`·`backend.c`·`internal_upstream.h`, `handler/proxy.c`. 기존 테스트 변화 없음. 검증은 bench 시나리오 C.
+- 기본 pct: `bounded`만 쓰면 200(`CFG_BOUND_PCT_DEFAULT`). 기본 picker는 계속 rr.
+- 근거 (2026-11-24, bench 시나리오 C, 백엔드 4대, 0.3 req/s, 대화 8개, 240초 × 3회, 이벤트 루프):
+  | 분포 | picker | TTFT p50 | TTFT p99 | 캐시 적중 | 넘침 |
+  | --- | --- | --- | --- | --- | --- |
+  | 균등 | rr | 3.8초 | 11.7초 | 31% | 80% |
+  | 균등 | hash | 1.8초 | 10.4초 (8.2~20.7) | 62% | 0% |
+  | 균등 | bounded 125 / 150 / 200 | 3.8 / 1.8 / 1.8초 | 15.1 / 14.6 / 12.9초 | 48 / 53 / 54% | 29 / 21 / 15% |
+  | Zipf 1.0 | rr | 3.8초 | 12.2초 | 27% | 75% |
+  | Zipf 1.0 | hash | 3.8초 | 29.1초 | 58% | 0% |
+  | Zipf 1.0 | bounded 125 / 150 / 200 | 3.8 / 3.8 / 3.2초 | 13.8 / 15.3 / 19.5초 | 36 / 39 / 45% | 39 / 31 / 19% |
+  - hash는 키가 적거나 치우치면 한 백엔드에 몰려(최대 동시 8, 슬롯 4) p99가 rr의 2.4배가 된다.
+  - bounded는 상한이 낮으면(125) 한가할 때 올림 때문에 상한이 1이 되어 자주 넘기고 캐시를 잃는다. 200에서 넘침이 가장 적고 균등 분포 p50이 hash와 같다.
+  - p99는 rr보다 낫다고 할 수 없다 (실행당 요청 약 55개라 p99 ≈ 최댓값, 3회 편차 큼). 처리 능력 탐색(속도마다 1회)에서는 1.2 req/s에서 bounded 125가 완료 0.44 req/s로 rr 0.31·hash 0.39보다 높았다.
+  - fake_llm의 처리 시간은 Ollama llama3.2:1b(M4)로 보정한 입력값이라 절대값이 아니라 상대 비교다.
