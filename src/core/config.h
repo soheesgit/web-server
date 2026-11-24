@@ -25,7 +25,7 @@
  *              / "engine" WS ( "pool" / "loop" )
  *              / "workers" WS uint
  *              / "upstream" WS name 1*( WS hostport )
- *              / "picker" WS name WS ( "rr" / "hash" / "bounded" WS uint )   ; D-042 (제안)
+ *              / "picker" WS name WS ( "rr" / "hash" / "bounded" [ WS uint ] )   ; D-042 (제안)
  *              / route
  *              / "host" WS hostname WS route
  *              / knob WS uint
@@ -69,6 +69,8 @@
 #define CFG_NAME_MAX 32     /* upstream 이름 버퍼 크기 (NUL 포함) */
 #define CFG_HOST_MAX 256    /* 호스트 이름 버퍼 크기 (NUL 포함) */
 #define CFG_PATH_MAX 4096   /* 경로·prefix 버퍼 크기 (NUL 포함) */
+
+#define CFG_BOUND_PCT_DEFAULT 200 /* "picker <그룹> bounded"에서 pct를 생략했을 때 (D-042) */
 
 /**
  * route의 처리 방식.
@@ -138,7 +140,7 @@ typedef struct {
     size_t n_backends;                         /* 1~CFG_MAX_BACKENDS */
     cfg_picker_t picker; /* 기본 CFG_PICK_RR. picker 지시어는 upstream 정의 뒤에 온다 */
     int bound_pct; /* CFG_PICK_BOUNDED: 상한 = 올림(평균 처리 중 수 × bound_pct / 100).
-                      101 이상 (예: 125). 그 밖에는 0 */
+                      101 이상, 생략하면 CFG_BOUND_PCT_DEFAULT. 그 밖에는 0 */
 } upstream_conf_t;
 
 /**

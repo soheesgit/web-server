@@ -31,6 +31,9 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
     out_job->max_attempts = (int)upstream_backend_count(rt->upstream);
     out_job->client_minor = req->minor;
     out_job->client_keep_alive = req->keep_alive;
+    if (sid != NULL) {
+        out_job->affinity_key = sid->value;
+    }
 
     upstream_rewrite_t rw = {
         ctx->client_ip, str_from_cstr(backend_hostport(b)), {0}, rt->keep_host};

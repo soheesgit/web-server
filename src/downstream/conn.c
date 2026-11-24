@@ -6,6 +6,7 @@
 #include "downstream/conn.h"
 
 #include "common/http_framing.h"
+#include "common/http_headers.h"
 #include "core/log.h"
 #include "core/platform.h"
 #include "downstream/internal_response.h"
@@ -584,6 +585,10 @@ static int setup_proxy_job(conn_t *c, const http_request_t *req, const route_t *
         .client_minor = req->minor,
         .client_keep_alive = req->keep_alive,
     };
+    const http_header_t *sid = http_header_get(&req->headers, "X-Session-Id"); /* D-045 */
+    if (sid != NULL) {
+        c->job.affinity_key = sid->value;
+    }
     if (req->body.len > SIZE_MAX - req->head_len - 1024 ||
         buf_init(&c->job.request, 0, req->head_len + req->body.len + 1024) != 0) {
         (void)plan_error(&c->plan, 500);

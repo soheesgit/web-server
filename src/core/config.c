@@ -336,7 +336,7 @@ static int parse_upstream(cfg_ctx_t *c, const str_t *tok, size_t n)
     return 0;
 }
 
-/* picker <그룹> rr | hash | bounded <pct>  (D-042 제안). 그룹은 먼저 정의되어 있어야 한다. */
+/* picker <그룹> rr | hash | bounded [<pct>]  (D-042 제안). 그룹은 먼저 정의되어 있어야 한다. */
 static int parse_picker(cfg_ctx_t *c, const str_t *tok, size_t n)
 {
     upstream_conf_t *u = NULL;
@@ -358,6 +358,10 @@ static int parse_picker(cfg_ctx_t *c, const str_t *tok, size_t n)
         u->picker = CFG_PICK_RR;
     } else if (n == 3 && str_eq(tok[2], "hash")) {
         u->picker = CFG_PICK_HASH;
+    } else if (n == 3 && str_eq(tok[2], "bounded")) {
+        u->picker = CFG_PICK_BOUNDED;
+        u->bound_pct = CFG_BOUND_PCT_DEFAULT;
+        return 0;
     } else if (n == 4 && str_eq(tok[2], "bounded") && parse_uint(tok[3], 10000, &pct) == 0 &&
                pct > 100) {
         u->picker = CFG_PICK_BOUNDED;
@@ -365,7 +369,7 @@ static int parse_picker(cfg_ctx_t *c, const str_t *tok, size_t n)
         return 0;
     } else {
         return cfg_fail_at(c, c->line, EINVAL,
-                           "picker: expected rr, hash or 'bounded <pct over 100>'");
+                           "picker: expected rr, hash or 'bounded [<pct over 100>]'");
     }
     u->bound_pct = 0;
     return 0;
