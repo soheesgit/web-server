@@ -11,6 +11,7 @@
 | `e2e/harness.py` | 서버·백엔드 프로세스, 원시 소켓 클라이언트, 독립 응답 파서, fixture 준비 |
 | `e2e/run_e2e.py` | E2E 러너 (`make e2e`). 테스트당 30초 |
 | `e2e/test_<분류>.py` | 기능 테스트 (E-ST, E-CG, E-PX, E-KA, E-ER, E-SL, E-CF) |
+| `robust/` | 보조 스위트 (기획서 ID 밖): 성질 검사 `props.c`, 공격·경계 E2E `test_robust.py`(R-NN, `run_e2e.py --tests`로 실행). 안내는 [robust/README.md](robust/README.md) |
 | `fakes/fake_backend.py` | 가짜 백엔드 (모드는 파일 머리 주석) |
 | `fakes/fake_handler.{h,c}` | C 테스트용 요청·설정·시계 도우미 |
 | `fixtures/www/`, `cgi-bin/`, `conf/` | 정적 파일, CGI 스크립트, 설정 파일. 생성 fixture(`big.bin`, `secret.txt`, `escape`, `fifo`)는 테스트 시작 시 만들어지고 커밋하지 않는다 |
@@ -18,6 +19,7 @@
 ```sh
 make unit                      # C 계약 최소셋
 make e2e                       # 기능 테스트
+make robust                    # 보조 스위트 (ASan, pool·loop 두 엔진)
 python3 tests/e2e/run_e2e.py --bin build/httpd --pending tests/pending.txt --only E-ST -v
 build/run_unit --pending tests/pending.txt --only U-CORE -v
 ```

@@ -47,3 +47,5 @@
 - [x] relay — 상태 머신 (v2)
 
 v1과 v2를 모두 반영했다. v2는 downstream `conn.c`가 `relay_start`·`relay_step`을 이벤트마다 부르고 `relay_fd`를 엔진에 등록한다. WSL Ubuntu에서 `make`, `make lint`, `make test`를 실행해 통과했다 (2026-11-23). `make asan`은 아직 실행하지 않았다.
+
+2026-11-24: 업스트림 응답이 빈 줄로 시작하고 수신 버퍼가 머리 끝에서 끝나면 `response_parse_head`가 502를 돌려주던 문제를 고쳤다. `http_find_head_end`의 `head_len`은 앞 빈 줄을 포함한 끝 위치인데 skip을 한 번 더 뺐다. 회귀 테스트는 `tests/robust`의 응답 접두사 성질과 R-15 (`make robust`).

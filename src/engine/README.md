@@ -46,6 +46,8 @@
 
 v1과 v2를 모두 구현했다. v2는 `-e loop`(또는 설정 `engine loop`)로 고른다. 스레드 하나가 poller로 대기 소켓·클라이언트·CGI pipe·업스트림 fd를 함께 감시한다 (D-040). WSL Ubuntu에서 `make lint`, `make test`, `make asan`이 통과하고, 같은 E2E 68개를 `HTTPD_ENGINE=loop`로 돌려도 일반·ASan 빌드 모두 통과한다 (2026-11-23).
 
+2026-11-24: epoll·kqueue poller가 상대의 반쪽 닫기(FIN)를 오류(4)로 알려, v2에서 요청을 보낸 뒤 쓰기 쪽만 닫은 클라이언트가 응답을 받지 못하던 문제를 고쳤다. 지금은 `poller.h` 계약("1 읽기 가능(또는 EOF)")대로 읽기(1)로만 알리고, 레벨 트리거인 `EPOLLRDHUP`은 읽기를 감시할 때만 등록한다. 회귀 테스트는 `tests/robust`의 R-10 (`make robust`).
+
 ## 측정 (v1 pool vs v2 loop)
 
 재현: `make && python3 tests/bench/bench.py --idle 0,100,1000,5000 --conns 32,256,1000`
