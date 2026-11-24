@@ -7,8 +7,10 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -20,7 +22,7 @@
 
 static volatile sig_atomic_t g_stop;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
-static int g_accepted, g_served, g_closed;
+static int g_accepted, g_served, g_closed, g_busy;
 
 typedef struct {
     int fd;
@@ -133,6 +135,21 @@ static int open_listener(int *out_port)
     return fd;
 }
 
+static int connect_loopback(int port)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 static void *stop_after_100ms(void *arg)
 {
     (void)arg;
@@ -170,18 +187,12 @@ static void *connector(void *arg)
     (void)arg;
 
     for (int i = 0; i < 1000; i++) {
-        struct sockaddr_in sa;
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        int fd = connect_loopback(g_port);
         int lag;
 
         if (fd < 0) {
             break;
         }
-        memset(&sa, 0, sizeof(sa));
-        sa.sin_family = AF_INET;
-        sa.sin_port = htons((uint16_t)g_port);
-        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        (void)connect(fd, (struct sockaddr *)&sa, sizeof(sa));
         close(fd);
         /* accept 큐(backlog)를 넘지 않도록 엔진이 따라올 때까지 기다린다 */
         deadline = mono_ms() + 3000;
@@ -230,6 +241,108 @@ static void t_u_en_02(void)
     CHECK_EQ_INT(g_closed, 1000);
 }
 
+static void cb_serve_held(void *ctx, void *obj)
+{
+    const obj_t *o = obj;
+    struct pollfd peer = {o->fd, POLLIN, 0};
+    cb_serve(ctx, obj);
+    (void)poll(&peer, 1, 3000);
+}
+
+static void cb_count_busy(void *ctx, int fd)
+{
+    pthread_mutex_lock(&g_mu);
+    g_busy++;
+    pthread_mutex_unlock(&g_mu);
+    cb_busy(ctx, fd);
+}
+
+static bool wait_for_count(const int *counter, int expected, int64_t deadline)
+{
+    do {
+        pthread_mutex_lock(&g_mu);
+        bool ready = *counter >= expected;
+        pthread_mutex_unlock(&g_mu);
+        if (ready) {
+            return true;
+        }
+        sleep_ms(1);
+    } while (mono_ms() < deadline);
+    return false;
+}
+
+typedef struct {
+    int port;
+    pthread_t engine_thread;
+    bool saturated;
+} queue_probe_t;
+
+static void mark_stop(int signum)
+{
+    (void)signum;
+    g_stop = 1;
+}
+
+static void *fill_queue(void *arg)
+{
+    queue_probe_t *probe = arg;
+    int64_t deadline = mono_ms() + 2000;
+    int active = connect_loopback(probe->port);
+    int queued = -1;
+    int overflow = -1;
+
+    if (active >= 0 && wait_for_count(&g_served, 1, deadline)) {
+        queued = connect_loopback(probe->port);
+    }
+    if (queued >= 0 && wait_for_count(&g_accepted, 2, deadline)) {
+        overflow = connect_loopback(probe->port);
+    }
+    probe->saturated = overflow >= 0 && wait_for_count(&g_busy, 1, deadline);
+    if (overflow >= 0) {
+        close(overflow);
+    }
+    if (queued >= 0) {
+        close(queued);
+    }
+    if (active >= 0) {
+        close(active);
+    }
+    (void)pthread_kill(probe->engine_thread, SIGUSR1);
+    return NULL;
+}
+
+static void t_u_en_03(void)
+{
+    queue_probe_t probe = {.engine_thread = pthread_self()};
+    int lfd = open_listener(&probe.port);
+    CHECK(lfd >= 0);
+
+    engine_callbacks_t callbacks = CB;
+    callbacks.serve_blocking = cb_serve_held;
+    callbacks.on_busy = cb_count_busy;
+    engine_t *e = engine_new(ENGINE_THREAD_POOL, 1, 1, &callbacks, NULL);
+    CHECK(e != NULL);
+
+    struct sigaction act = {.sa_handler = mark_stop};
+    sigemptyset(&act.sa_mask);
+    CHECK_EQ_INT(sigaction(SIGUSR1, &act, NULL), 0);
+    g_stop = 0;
+    g_accepted = g_served = g_closed = g_busy = 0;
+    pthread_t client;
+    CHECK_EQ_INT(pthread_create(&client, NULL, fill_queue, &probe), 0);
+    int rc = engine_run(e, lfd, &g_stop, 1000);
+    pthread_join(client, NULL);
+    engine_free(e);
+    close(lfd);
+
+    CHECK_EQ_INT(rc, 0);
+    CHECK(probe.saturated);
+    CHECK_EQ_INT(g_busy, 1);
+    CHECK_EQ_INT(g_accepted, 2);
+    CHECK_EQ_INT(g_served, 2);
+    CHECK_EQ_INT(g_closed, 2);
+}
+
 static void t_u_en_05(void)
 {
     poller_t *p = poller_new();
@@ -255,5 +368,6 @@ void register_engine_tests(void)
 {
     test_register("U-EN-01", "engine_run: pool of 4 stops 100ms after flag", t_u_en_01);
     test_register("U-EN-02", "engine: 1000 connections served exactly once", t_u_en_02);
+    test_register("U-EN-03", "engine: a full queue calls on_busy before on_accept", t_u_en_03);
     test_register("U-EN-05", "poller: socketpair read event returns ptr", t_u_en_05);
 }
