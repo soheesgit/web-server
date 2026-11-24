@@ -20,7 +20,6 @@ U-PX-07
 U-PX-10
 
 # --- U-US --- 계약 최소셋: upstream
-U-US-01
 U-US-09
 U-US-12
 U-US-17
