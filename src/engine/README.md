@@ -34,6 +34,7 @@
 | --- | --- |
 | 현재(기능) | E-* 전체 (v1 엔진으로), E-SL-01~02 (동시 처리) |
 | 현재(계약 최소셋) | U-EN-01, 02, 05 |
+| 추가 계약 | U-EN-03 (작업 큐 포화 시 on_accept 없이 on_busy 호출) |
 | 추후 | U-EN-01~12 중 나머지 |
 
 ## 구현 단계
@@ -43,3 +44,5 @@
 - [ ] poller_kqueue
 - [ ] poller_poll
 - [ ] engine_loop (v2)
+
+Stage 5의 종료·과부하 검증과 워커 수·큐 크기 비교는 [스레드 풀 검증 및 측정](../../docs/benchmarks/stage5-workers.md)을 참고한다.

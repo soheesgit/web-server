@@ -162,6 +162,10 @@ static int accept_loop(engine_t *e, int lfd, const volatile sig_atomic_t *stop)
             }
             continue;
         }
+        if (*stop) {
+            close(fd);
+            return 0;
+        }
         if (platform_set_cloexec(fd) != 0) {
             close(fd);
             continue;
