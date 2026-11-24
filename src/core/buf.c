@@ -172,6 +172,28 @@ void buf_consume(buf_t *b, size_t n)
     }
 }
 
+void buf_shrink(buf_t *b, size_t keep)
+{
+    int saved = errno;
+    size_t target;
+    char *p;
+    if (b == NULL || b->data == NULL) {
+        return;
+    }
+    target = b->len > keep ? b->len : keep;
+    if (target == 0) {
+        target = 1; /* 메모리를 해제하지 않는다: cleanup과 달리 max를 지킨다 */
+    }
+    if (target < b->cap) {
+        p = realloc(b->data, target);
+        if (p != NULL) {
+            b->data = p;
+            b->cap = target;
+        }
+    }
+    errno = saved;
+}
+
 void buf_reset(buf_t *b)
 {
     if (b != NULL) {

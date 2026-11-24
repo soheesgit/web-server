@@ -37,6 +37,10 @@
  * v1(blocking)은 CGI pipe와 upstream relay를 기다리며 처리한다. v2(non-blocking)는 같은 일을
  * 단계(v2_stage_t)로 나눠, pipe·업스트림 fd를 engine_watch로 등록하고 이벤트마다 이어 간다.
  */
+/* 요청이 끝난 뒤 연결 버퍼가 남겨 둘 용량 (바이트). 이보다 커졌던 버퍼는 이 크기까지 줄인다
+ * (D-043). */
+enum { CONN_KEEP_BUF = 64 * 1024 };
+
 /* 현재 연결 단계: 요청 받기, 응답 보내기, 닫힘. */
 typedef enum { CONN_READING, CONN_WRITING, CONN_FINISHED } conn_phase_t;
 
@@ -847,6 +851,11 @@ static int finish_request(conn_t *c, int64_t now_ms)
     if (consumed != 0) {
         buf_consume(&c->rbuf, consumed);
     }
+    /* 큰 본문을 한 번 받은 keep-alive 연결이 그 용량을 계속 쥐지 않게 한다 (D-043). req 뷰는 위에서
+     * 비웠다. */
+    buf_shrink(&c->rbuf, CONN_KEEP_BUF);
+    buf_shrink(&c->wbuf, CONN_KEEP_BUF);
+    buf_shrink(&c->pipe_buf, CONN_KEEP_BUF);
     if (close_after) {
         c->phase = CONN_FINISHED;
         c->deadline_ms = -1;

@@ -121,6 +121,27 @@ int buf_appendf(buf_t *b, const char *fmt, ...) __attribute__((format(printf, 2,
 void buf_consume(buf_t *b, size_t n);
 
 /**
+ * 쓰고 남은 용량을 줄인다 (D-043).
+ *
+ * 용량이 max(len, keep)보다 크면 그 크기로 realloc한다. 그 밖에는 아무 일도 없다. len과 내용, max는
+ * 그대로다. realloc이 실패하면 용량을 그대로 둔다 (에러 없음). 한 번 커진 버퍼는
+ * buf_consume·buf_reset 뒤에도 용량을 쥐고 있으므로, 큰 본문을 받은 연결이 그 메모리를 계속 붙잡지
+ * 않게 할 때 부른다. 예: cap 4 MiB, len 0, keep 64 KiB → cap 64 KiB. cap 4 MiB, len 1 MiB, keep 64
+ * KiB → cap 1 MiB.
+ *
+ * @param b     대상 버퍼. NULL이거나 아직 메모리가 없으면 아무 일도 없다
+ * @param keep  남겨 둘 최소 용량 (바이트)
+ *
+ * 에러:    없음 (errno를 바꾸지 않음)
+ * 소유권:  없음. 주소가 바뀔 수 있어 이 버퍼를 빌린 str_t는 무효가 된다
+ * 스레드:  [per-object]
+ * I/O:     없음
+ * 블로킹:  없음
+ * 테스트:  tests/robust props (buf)
+ */
+void buf_shrink(buf_t *b, size_t keep);
+
+/**
  * len을 0으로 만든다. 메모리는 유지한다.
  *
  * @param b  대상 버퍼. NULL 불가
