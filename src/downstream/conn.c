@@ -15,6 +15,7 @@
 #include "handler/handler.h"
 #include "handler/plan.h"
 #include "upstream/relay.h"
+#include "upstream/request_writer.h"
 #include "upstream/upstream.h"
 
 #include <arpa/inet.h>
@@ -50,6 +51,7 @@ struct conn {
     response_plan_t plan;      /* 현재 요청의 계획 */
     proxy_job_t job;           /* 현재 요청의 프록시 작업 */
     size_t up_head_len;        /* BODY_UPSTREAM: uc->rbuf 앞의 응답 머리 길이 */
+    bool client_canceled;      /* 클라이언트가 업스트림 대기 중 종료 */
     bool up_reusable; /* BODY_UPSTREAM: 업스트림 응답이 연결 재사용을 허용 */
 };
 
@@ -137,6 +139,39 @@ static int poll_until(struct pollfd *pfd, nfds_t n, int64_t deadline_ms)
         r = poll(pfd, n, (int)min64(left, INT_MAX));
         if (r > 0 || (r < 0 && errno != EINTR)) {
             return r;
+        }
+    }
+}
+
+/* 클라이언트 입력을 소비하지 않는다. 파이프라인 입력은 다음 요청을 위해 보존한다. */
+static bool client_gone(const conn_t *c, short events)
+{
+    if ((events & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        return true;
+    }
+    char ch;
+    ssize_t n = recv(c->fd, &ch, 1, MSG_PEEK | MSG_DONTWAIT);
+    return n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR);
+}
+
+/* 클라이언트 취소와 업스트림 진척 중 먼저 도착하는 일을 처리한다. */
+static int proxy_wait(conn_t *c, int fd, short events, int64_t deadline)
+{
+    struct pollfd pfd[2] = {{fd, events, 0}, {c->fd, POLLIN, 0}};
+    for (;;) {
+        int rc = poll_until(pfd, 2, deadline);
+        if (rc <= 0) {
+            return rc;
+        }
+        if (pfd[1].revents != 0) {
+            if (client_gone(c, pfd[1].revents)) {
+                return -2;
+            }
+            /* 이미 읽을 파이프라인이 있으면 POLLIN으로 계속 깨지 않게 한다. */
+            pfd[1].events = 0;
+        }
+        if (pfd[0].revents != 0) {
+            return 1;
         }
     }
 }
@@ -313,19 +348,28 @@ static void cgi_pump_stdin(response_plan_t *p)
 }
 
 /* stdout이 읽을 수 있게 될 때까지 기다리며 그동안 stdin을 쓴다. 1 준비, 0 마감, -1 오류. */
-static int cgi_wait_out(response_plan_t *p)
+static int cgi_wait_out(conn_t *c)
 {
+    response_plan_t *p = &c->plan;
+    short client_events = POLLIN;
     int64_t deadline = p->body.pipe.deadline_ms;
 
     for (;;) {
-        struct pollfd pfd[2] = {{p->body.pipe.out_fd, POLLIN, 0}, {p->body.pipe.in_fd, POLLOUT, 0}};
-        nfds_t n = p->body.pipe.in_fd >= 0 ? 2 : 1;
-        int r = poll_until(pfd, n, deadline < 0 ? INT64_MAX : deadline);
+        struct pollfd pfd[] = {{p->body.pipe.out_fd, POLLIN, 0},
+                               {p->body.pipe.in_fd, POLLOUT, 0},
+                               {c->fd, client_events, 0}};
+        int r = poll_until(pfd, 3, deadline < 0 ? INT64_MAX : deadline);
 
         if (r <= 0) {
             return r;
         }
-        if (n == 2 && (pfd[1].revents & (POLLOUT | POLLERR | POLLHUP)) != 0) {
+        if (pfd[2].revents != 0) {
+            if (client_gone(c, pfd[2].revents)) {
+                return -2;
+            }
+            client_events = 0;
+        }
+        if ((pfd[1].revents & (POLLOUT | POLLERR | POLLHUP)) != 0) {
             cgi_pump_stdin(p);
         }
         if ((pfd[0].revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
@@ -381,7 +425,12 @@ static void cgi_resolve_head(conn_t *c, int minor, size_t *out_body_off)
             plan_error(p, 502);
             return;
         }
-        w = cgi_wait_out(p);
+        w = cgi_wait_out(c);
+        if (w == -2) {
+            plan_cleanup(p);
+            c->client_canceled = true;
+            return;
+        }
         if (w == 0) {
             plan_error(p, 504); /* plan_cleanup이 자식을 SIGKILL·waitpid */
             return;
@@ -410,7 +459,7 @@ static int cgi_send_body(conn_t *c, const char *pre, size_t pre_len, uint64_t *s
     }
     *sent += pre_len;
     while (*sent < limit) {
-        int w = cgi_wait_out(p);
+        int w = cgi_wait_out(c);
         ssize_t n;
 
         if (w <= 0) {
@@ -448,90 +497,247 @@ static int cgi_send_body(conn_t *c, const char *pre, size_t pre_len, uint64_t *s
 
 /* ── 프록시 (BODY_UPSTREAM) ─────────────────────────────────────────────── */
 
-/* relay를 실행하고 재시도 판단을 따른다. 끝나면 plan은 BODY_UPSTREAM 또는 에러 계획. */
-static void proxy_run(conn_t *c, int client_minor)
+static int write_proxy_request(conn_t *c, const http_request_t *req, const route_t *rt)
+{
+    upstream_rewrite_t rw = {
+        .client_ip = str_from_cstr(c->ip),
+        .upstream_host = str_from_cstr(backend_hostport(c->job.backend)),
+        .keep_host = rt->keep_host,
+    };
+    if (rt->strip_prefix) {
+        rw.strip_prefix = (str_t){rt->prefix, rt->prefix_len};
+        if (rw.strip_prefix.len > 0 && rw.strip_prefix.ptr[rw.strip_prefix.len - 1] == '/') {
+            rw.strip_prefix.len--;
+        }
+    }
+    return request_write_upstream(req, &rw, &c->job.request);
+}
+
+static relay_status_t drive_relay(conn_t *c, relay_t *relay, bool *out_canceled)
+{
+    unsigned events = 0;
+    for (;;) {
+        relay_status_t status = relay_step(relay, events, platform_now_ms());
+        if (status != RELAY_WANT_READ && status != RELAY_WANT_WRITE) {
+            return status;
+        }
+        bool read = status == RELAY_WANT_READ;
+        int ready =
+            proxy_wait(c, relay_fd(relay), read ? POLLIN : POLLOUT, relay_deadline_ms(relay));
+        if (ready < 0) {
+            *out_canceled = ready == -2;
+            return RELAY_FAIL;
+        }
+        events = ready > 0 ? (read ? EV_READ : EV_WRITE) : 0;
+    }
+}
+
+/* 슬롯을 예약한 뒤 해당 백엔드의 Host로 쓰고, 실패한 시도는 반납한 뒤 다음을 예약한다. */
+static void proxy_run(conn_t *c, const http_request_t *req, const route_t *rt)
 {
     const config_t *cfg = c->env->cfg;
+    proxy_job_t *job = &c->job;
 
+    if (client_gone(c, 0)) {
+        c->client_canceled = true;
+        return;
+    }
+    *job = (proxy_job_t){
+        .group = rt->upstream,
+        .method = req->method,
+        .attempts = 1,
+        .max_attempts = (int)upstream_backend_count(rt->upstream),
+        .client_minor = req->minor,
+        .client_keep_alive = req->keep_alive,
+    };
+    if (req->body.len > SIZE_MAX - req->head_len - 1024 ||
+        buf_init(&job->request, 0, req->head_len + req->body.len + 1024) != 0) {
+        (void)plan_error(&c->plan, 500);
+        return;
+    }
     for (;;) {
         upstream_conn_t *uc = NULL;
         http_response_t resp;
-        proxy_fail_t why = PFAIL_CONNECT;
-        relay_status_t s;
-
-        s = relay_exchange_blocking(&c->job, c->env->lim, cfg->upstream_connect_timeout_ms,
-                                    cfg->upstream_response_timeout_ms, &uc, &resp, &why);
-        if (s == RELAY_OK) {
-            /* D-034: HTTP/1.0에 청크 구분자가 포함된 본문을 보내지 않는다. */
-            if (client_minor == 0 && resp.framing.kind == FRAMING_CHUNKED) {
+        proxy_fail_t why = PFAIL_BAD_RESPONSE;
+        relay_t *relay =
+            relay_start(job, c->env->lim, platform_now_ms(), cfg->upstream_connect_timeout_ms,
+                        cfg->upstream_response_timeout_ms);
+        if (relay == NULL) {
+            (void)plan_error(&c->plan, 500);
+            return;
+        }
+        if (job->backend == NULL) {
+            relay_free(relay);
+            (void)plan_error(&c->plan, job->attempts == 1 ? 503 : 502);
+            return;
+        }
+        if (client_gone(c, 0)) {
+            relay_free(relay);
+            c->client_canceled = true;
+            return;
+        }
+        if (relay_fd(relay) >= 0 && write_proxy_request(c, req, rt) != 0) {
+            relay_free(relay);
+            (void)plan_error(&c->plan, 500);
+            return;
+        }
+        relay_status_t result = drive_relay(c, relay, &c->client_canceled);
+        relay_take(relay, &uc, &resp, &why);
+        relay_free(relay);
+        if (c->client_canceled) {
+            return;
+        }
+        if (result == RELAY_OK) {
+            if (req->minor == 0 && resp.framing.kind == FRAMING_CHUNKED) {
                 upstream_release(uc, false);
                 (void)plan_error(&c->plan, 502);
                 return;
             }
             c->up_head_len = resp.head_len;
             c->up_reusable = resp.keep_alive;
-            (void)proxy_on_head(&c->job, uc, &resp, &c->plan);
+            (void)proxy_on_head(job, uc, &resp, &c->plan);
             return;
         }
-        if (proxy_on_fail(&c->job, why, &c->plan) == PROXY_GIVE_UP) {
+        backend_t *failed = job->backend;
+        if (proxy_on_fail(job, why, &c->plan) == PROXY_GIVE_UP) {
             return;
         }
+        job->backend = failed;
+        buf_reset(&job->request);
     }
 }
 
-/* 업스트림 본문을 경계 추적기가 끝을 알릴 때까지 그대로 전달하고 연결을 반납한다. */
+typedef enum { CHUNK_SIZE_LINE, CHUNK_PAYLOAD, CHUNK_SEPARATOR, CHUNK_TRAILERS } chunk_part_t;
+
+typedef struct {
+    chunk_part_t part;
+    size_t metadata;
+} chunk_relay_t;
+
+/* 공용 추적기로 검증한 뒤 데이터만 정규 CRLF 청크로 다시 쓴다. */
+static http_body_result_t relay_chunk(conn_t *c, http_body_tracker_t *tracker, chunk_relay_t *chunk,
+                                      const char *data, size_t n, uint64_t *sent,
+                                      bool *out_client_error)
+{
+    while (n > 0) {
+        size_t piece;
+        const bool payload = chunk->part == CHUNK_PAYLOAD;
+        const char *lf = NULL;
+        if (payload) {
+            piece = tracker->remaining < n ? (size_t)tracker->remaining : n;
+        } else {
+            lf = memchr(data, '\n', n);
+            piece = lf == NULL ? n : (size_t)(lf - data) + 1;
+            if (piece > c->env->lim->max_head - chunk->metadata) {
+                return BODY_ERROR;
+            }
+            chunk->metadata += piece;
+        }
+
+        size_t used;
+        http_body_result_t result = http_body_track(tracker, data, piece, &used);
+        if (result == BODY_ERROR || used != piece || (result == BODY_DONE && piece != n)) {
+            return BODY_ERROR;
+        }
+        if (result == BODY_DONE) {
+            if (response_write_last_chunk(&c->wbuf) != 0 || flush_wbuf(c) != 0) {
+                *out_client_error = true;
+                return BODY_ERROR;
+            }
+            return BODY_DONE;
+        }
+        if (payload) {
+            if (send_body_piece(c, data, piece, true) != 0) {
+                *out_client_error = true;
+                return BODY_ERROR;
+            }
+            *sent += piece;
+            if (tracker->remaining == 0) {
+                chunk->part = CHUNK_SEPARATOR;
+            }
+        } else if (lf != NULL && chunk->part != CHUNK_TRAILERS) {
+            if (chunk->part == CHUNK_SIZE_LINE) {
+                chunk->part = tracker->remaining == 0 ? CHUNK_TRAILERS : CHUNK_PAYLOAD;
+            } else {
+                chunk->part = CHUNK_SIZE_LINE;
+            }
+            chunk->metadata = 0;
+        }
+        data += piece;
+        n -= piece;
+    }
+    return BODY_MORE;
+}
+
+/* 본문이 완전히 검증된 경우만 성공으로 보고한다. 클라이언트 취소는 건강 상태에 반영하지 않는다. */
 static int upstream_send_body(conn_t *c, uint64_t *sent)
 {
     response_plan_t *p = &c->plan;
     upstream_conn_t *uc = p->body.upstream.conn;
     http_body_tracker_t *t = &p->body.upstream.tracker;
-    const char *pre = uc->rbuf.len > c->up_head_len ? uc->rbuf.data + c->up_head_len : NULL;
-    size_t pre_len = pre != NULL ? uc->rbuf.len - c->up_head_len : 0;
-    bool clean = true; /* 본문 뒤에 남는 바이트 없이 끝났는가 */
-    http_body_result_t res;
-    size_t used = 0;
-    char tmp[CONN_IO_CHUNK];
-    int rc = 0;
+    size_t buffered = uc->rbuf.len - c->up_head_len;
+    const char *data = uc->rbuf.data + c->up_head_len;
+    char chunk[CONN_IO_CHUNK];
+    http_body_result_t result = BODY_MORE;
+    bool canceled = false;
+    chunk_relay_t chunk_relay = {0};
+    bool upstream_failed = false;
+    int64_t deadline = platform_now_ms() + c->env->cfg->upstream_response_timeout_ms;
 
-    res = http_body_track(t, pre, pre_len, &used);
-    if (send_all(c, pre, used) != 0) {
-        res = BODY_ERROR;
-    }
-    *sent += used;
-    clean = used == pre_len;
-    while (res == BODY_MORE) {
-        struct pollfd pfd = {uc->fd, POLLIN, 0};
-        ssize_t n;
-
-        if (poll_until(&pfd, 1, platform_now_ms() + c->env->cfg->upstream_response_timeout_ms) <=
-            0) {
-            res = BODY_ERROR;
+    for (;;) {
+        if (t->f.kind == FRAMING_CHUNKED) {
+            result = relay_chunk(c, t, &chunk_relay, data, buffered, sent, &canceled);
+        } else {
+            size_t used = 0;
+            result = http_body_track(t, data, buffered, &used);
+            if (result == BODY_DONE && used != buffered) {
+                result = BODY_ERROR;
+            }
+            if (result != BODY_ERROR && send_all(c, data, used) != 0) {
+                canceled = true;
+                result = BODY_ERROR;
+            }
+            *sent += used;
+        }
+        if (result == BODY_ERROR) {
+            upstream_failed = !canceled;
             break;
         }
-        n = read(uc->fd, tmp, sizeof(tmp));
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        if (result == BODY_DONE) {
+            break;
+        }
+        if (buffered > 0) {
+            deadline = platform_now_ms() + c->env->cfg->upstream_response_timeout_ms;
+        }
+        int ready = proxy_wait(c, uc->fd, POLLIN, deadline);
+        if (ready <= 0) {
+            canceled = ready == -2;
+            upstream_failed = !canceled;
+            break;
+        }
+        ssize_t n;
+        do {
+            n = read(uc->fd, chunk, sizeof(chunk));
+        } while (n < 0 && errno == EINTR);
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            data = chunk;
+            buffered = 0;
             continue;
         }
         if (n <= 0) {
-            /* CLOSE는 EOF가 본문 끝. 그 밖에는 길이 미달 */
-            res = (n == 0 && t->f.kind == FRAMING_CLOSE) ? BODY_DONE : BODY_ERROR;
-            clean = false;
+            upstream_failed = !(n == 0 && t->f.kind == FRAMING_CLOSE);
             break;
         }
-        res = http_body_track(t, tmp, (size_t)n, &used);
-        if (send_all(c, tmp, used) != 0) {
-            res = BODY_ERROR;
-            break;
-        }
-        *sent += used;
-        clean = used == (size_t)n;
+        data = chunk;
+        buffered = (size_t)n;
     }
-    if (res != BODY_DONE) {
-        rc = -1; /* 응답이 이미 나갔으므로 에러 응답 없이 클라이언트 연결을 닫는다 */
+    if (!canceled) {
+        upstream_report(uc->backend, !upstream_failed, platform_now_ms());
     }
-    upstream_release(uc, rc == 0 && clean && c->up_reusable && t->f.kind != FRAMING_CLOSE);
+    upstream_release(uc,
+                     !canceled && !upstream_failed && c->up_reusable && t->f.kind != FRAMING_CLOSE);
     p->body.upstream.conn = NULL;
-    return rc;
+    return canceled || upstream_failed ? -1 : 0;
 }
 
 /* ── 요청 하나 ───────────────────────────────────────────────────────────── */
@@ -632,8 +838,10 @@ static void build_plan(conn_t *c, const http_request_t *req, size_t *out_cgi_bod
     ctx.server_port = c->server_port;
     ctx.now = platform_wall_time();
     ctx.now_ms = platform_now_ms();
-    if (handler_dispatch(req, rt, &ctx, &c->job, &c->plan) == HANDLER_NEED_UPSTREAM) {
-        proxy_run(c, req->minor);
+    if (rt->kind == ROUTE_PROXY) {
+        proxy_run(c, req, rt);
+    } else {
+        (void)handler_dispatch(req, rt, &ctx, &c->job, &c->plan);
     }
     if (c->plan.kind == BODY_PIPE && c->plan.head_pending) {
         cgi_resolve_head(c, req->minor, out_cgi_body_off);
@@ -698,15 +906,17 @@ static bool serve_one(conn_t *c)
     if (close_after) {
         c->plan.head.close = true; /* 그 응답에 Connection: close */
     }
-    rc = send_response(c, &req, cgi_body_off, &sent);
+    rc = c->client_canceled ? -1 : send_response(c, &req, cgi_body_off, &sent);
     fk = c->plan.head.framing.kind;
     /* response_write_head가 Connection: close를 넣는 경우와 같게 닫는다 */
     close_after = close_after || rc != 0 || c->plan.head.close || fk == FRAMING_CLOSE ||
                   (fk == FRAMING_CHUNKED && req.minor == 0);
 
-    copy_cstr(req.method_raw, method, sizeof(method));
-    copy_cstr(req.target, target, sizeof(target));
-    log_access(c->ip, method, target, c->plan.head.status, sent, platform_now_ms() - start);
+    if (!c->client_canceled) {
+        copy_cstr(req.method_raw, method, sizeof(method));
+        copy_cstr(req.target, target, sizeof(target));
+        log_access(c->ip, method, target, c->plan.head.status, sent, platform_now_ms() - start);
+    }
     proxy_job_cleanup(&c->job);
     plan_cleanup(&c->plan);
     buf_cleanup(&c->cgi_out);
