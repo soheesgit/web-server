@@ -5,6 +5,7 @@
 #include "unit/testlib.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/config.h"
@@ -70,6 +71,7 @@ static void t_u_rt_02(void)
     CHECK(m != NULL);
     CHECK(m->upstream == (struct upstream_group *)(void *)&g_group_a);
     router_free(r);
+    free(cfg);
 }
 
 static void t_u_rt_03(void)
@@ -87,6 +89,7 @@ static void t_u_rt_03(void)
     CHECK(router_match(r, host, "/api/x") != NULL);
     CHECK(router_match(r, host, "/apix") == NULL);
     router_free(r);
+    free(cfg);
 }
 
 void register_router_tests(void)
