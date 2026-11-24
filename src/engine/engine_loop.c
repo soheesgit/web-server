@@ -1,24 +1,22 @@
-/* src/engine/engine_loop.c
- *
- * v2 이벤트 루프와 추가 fd 등록. 명세: engine.h
- */
+/* v2 추가 fd 등록은 이벤트 엔진이 구현되는 단계에서 연결한다. */
 #include "engine/engine.h"
-#include "core/stub.h"
+
+#include <errno.h>
 
 int engine_watch(engine_t *e, int fd, unsigned events, void *obj)
 {
-    UNUSED(e);
-    UNUSED(fd);
-    UNUSED(events);
-    UNUSED(obj);
-    /* TODO(engine): 구현 — (테스트 없음) */
-    STUB_RETURN(-1);
+    (void)e;
+    (void)fd;
+    (void)events;
+    (void)obj;
+    errno = ENOTSUP;
+    return -1;
 }
 
 int engine_unwatch(engine_t *e, int fd)
 {
-    UNUSED(e);
-    UNUSED(fd);
-    /* TODO(engine): 구현 — (테스트 없음) */
-    STUB_RETURN(-1);
+    (void)e;
+    (void)fd;
+    errno = ENOTSUP;
+    return -1;
 }
