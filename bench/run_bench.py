@@ -45,7 +45,8 @@ def wait_port(port, timeout=10):
 class Stack:
     """백엔드 n대와 (선택) httpd를 띄우고 정리한다."""
 
-    def __init__(self, outdir, n_backends, backend_args=(), engine=None, workers=None):
+    def __init__(self, outdir, n_backends, backend_args=(), engine=None, workers=None,
+                 picker="rr"):
         self.outdir = outdir
         self.procs = []
         self.ports = [BACKEND_BASE + i for i in range(n_backends)]
@@ -68,6 +69,8 @@ class Stack:
                 if workers:
                     f.write(f"workers {workers}\n")
                 f.write("upstream llm " + " ".join(f"127.0.0.1:{p}" for p in self.ports) + "\n")
+                kind, _, pct = picker.partition(":")
+                f.write(f"picker llm {kind}{' ' + pct if pct else ''}\n")
                 f.write("route / proxy llm\n")
                 # 긴 prefill(수십 초) 동안 본문이 멈춰 있어도 끊지 않도록 (FR-LLM-02 전까지)
                 f.write("upstream_response_timeout_ms 600000\n")
@@ -204,15 +207,17 @@ def e1(a):
 # ── 시나리오 (E2) ──────────────────────────────────────────────────────────
 
 def scenario(a):
-    out = new_outdir(f"{a.name}-{a.engine}-r{a.rate}")
-    lines = [f"scenario {a.name}, engine {a.engine}, rate {a.rate}/s, duration {a.duration}s, "
-             f"backends 4, seed 1..{a.repeat}"]
+    tag = a.picker.replace(":", "")
+    out = new_outdir(f"{a.name}-{a.engine}-{tag}-z{a.zipf}-r{a.rate}")
+    lines = [f"scenario {a.name}, engine {a.engine}, picker {a.picker}, zipf {a.zipf}, "
+             f"rate {a.rate}/s, duration {a.duration}s, backends 4, seed 1..{a.repeat}"]
     for i in range(a.repeat):
-        st = Stack(out, 4, engine=a.engine)
+        st = Stack(out, 4, engine=a.engine, picker=a.picker)
         try:
             f = os.path.join(out, f"run{i + 1}.jsonl")
             summ = loadgen(st.target, f, "--scenario", a.name, "--rate", a.rate,
-                           "--duration", a.duration, "--warmup", a.warmup, "--seed", i + 1)
+                           "--duration", a.duration, "--warmup", a.warmup, "--seed", i + 1,
+                           "--zipf", a.zipf, "--conversations", a.conversations)
             json.dump(st.backend_json("/__stats"), open(os.path.join(out, f"run{i + 1}-stats.json"), "w"))
         finally:
             st.close()
@@ -224,18 +229,18 @@ def scenario(a):
 # ── 처리 능력 찾기 ────────────────────────────────────────────────────────
 
 def capacity(a):
-    out = new_outdir(f"capacity-{a.name}")
-    lines = [f"capacity: scenario {a.name}, loop, backends 4, 속도마다 {a.duration}s (워밍업 "
+    out = new_outdir(f"capacity-{a.name}-{a.picker.replace(':', '')}")
+    lines = [f"capacity: scenario {a.name}, loop, picker {a.picker}, backends 4, 속도마다 {a.duration}s (워밍업 "
              f"{a.warmup}s 제외), 도착 끝난 뒤 진행 중 요청까지 기다림",
              f"{'rate':>5} {'sent':>5} {'done/s':>7} {'short ttft p50':>15} {'p99':>8}"
              f" {'all ttft p99':>13} {'total p99':>10} {'5xx/err':>8}"]
     for rate in a.rates:
-        st = Stack(out, 4, engine="loop")
+        st = Stack(out, 4, engine="loop", picker=a.picker)
         try:
             f = os.path.join(out, f"r{rate}.jsonl")
             t0 = time.time()
             loadgen(st.target, f, "--scenario", a.name, "--rate", rate, "--duration",
-                    a.duration, "--warmup", a.warmup)
+                    a.duration, "--warmup", a.warmup, "--conversations", a.conversations)
             wall = time.time() - t0
         finally:
             st.close()
@@ -275,11 +280,16 @@ def main():
     s2.add_argument("--engine", default="loop", choices=["loop", "pool"])
     s2.add_argument("--repeat", type=int, default=1)
     s2.add_argument("--warmup", type=float, default=10)
+    s2.add_argument("--picker", default="rr", help="rr | hash | bounded:<pct> (D-042)")
+    s2.add_argument("--zipf", type=float, default=0.0, help="시나리오 C 대화 치우침")
+    s2.add_argument("--conversations", type=int, default=32, help="시나리오 C 대화 자리 수")
     s3 = sub.add_parser("capacity")
     s3.add_argument("--name", default="A")
     s3.add_argument("--rates", type=float, nargs="+", required=True)
     s3.add_argument("--duration", type=float, default=40)
     s3.add_argument("--warmup", type=float, default=10)
+    s3.add_argument("--picker", default="rr")
+    s3.add_argument("--conversations", type=int, default=32)
     a = p.parse_args()
     if not os.path.exists(HTTPD):
         sys.exit("build/httpd가 없다: make 먼저")

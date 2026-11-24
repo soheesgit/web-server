@@ -28,7 +28,9 @@ SCENARIOS = {
     "A": [("short", 1.0, 500, 100, None)],
     # B의 긴 요청은 기획서(5만/2000)의 1/10: 노트북 1B 보정 계수에 맞춘 크기 (bench/README.md)
     "B": [("short", 0.9, 500, 100, None), ("long", 0.1, 5000, 500, None)],
-    # C: 대화 32개가 번갈아 이어진다. 턴마다 앞부분이 그대로 반복된다
+    # C: 대화 --conversations개가 번갈아 이어진다. 턴마다 앞부분이 그대로 반복되고,
+    # --max-turns턴이 차면 같은 자리에 새 대화가 시작된다 (KV 상한을 넘지 않게).
+    # 대화마다 X-Session-Id 헤더를 보낸다. --zipf s면 대화 k를 1/(k+1)^s 비중으로 고른다
     "C": [("turn", 1.0, 2000, 200, "multiturn")],
     "long": [("stream", 1.0, 200, 1500, None)],  # E1: 오래 열린 스트림
     "tiny": [("tiny", 1.0, 50, 20, None)],
@@ -54,7 +56,9 @@ class Gen:
         self.a = a
         self.rng = random.Random(a.seed)
         self.mix = SCENARIOS[a.scenario]
-        self.sessions = {}  # 대화 → 지금까지 쌓인 토큰
+        self.sessions = {}  # 대화 자리 → [세대, 턴 수, 쌓인 토큰]
+        n = a.conversations
+        self.conv_w = [1.0 / (k + 1) ** a.zipf for k in range(n)]
         self.n = 0
         self.out = open(a.out, "w") if a.out else None
         self.rows = []
@@ -73,10 +77,13 @@ class Gen:
         self.n += 1
         req = {"input_tokens": inp, "max_tokens": out, "stream": True}
         if mode == "multiturn":
-            conv = f"c{self.rng.randrange(self.a.conversations)}"
-            hist = self.sessions.get(conv, 0)
+            slot = self.rng.choices(range(self.a.conversations), weights=self.conv_w)[0]
+            gen, turns, hist = self.sessions.get(slot, [0, 0, 0])
+            if turns >= self.a.max_turns:
+                gen, turns, hist = gen + 1, 0, 0
+            conv = f"c{slot}-{gen}"
             req.update(session=conv, prefix_tokens=hist, input_tokens=hist + inp)
-            self.sessions[conv] = hist + inp + out
+            self.sessions[slot] = [gen, turns + 1, hist + inp + out]
         return self.n, name, req
 
     def record(self, row):
@@ -93,14 +100,15 @@ async def one(g, rid, cls, req):
     row = {"id": rid, "cls": cls, "status": None, "t_send": now_ms(), "head_ms": None,
            "ttft_ms": None, "itl_med_ms": None, "itl_max_ms": None, "total_ms": None,
            "out_tokens": 0, "backend": None, "backend_timing": None, "aborted": False,
-           "error": None, "input_tokens": req["input_tokens"]}
+           "error": None, "input_tokens": req["input_tokens"], "session": req.get("session")}
     t0 = row["t_send"]
     writer = None
     try:
         reader, writer = await asyncio.open_connection(host, int(port))
+        sid = b"X-Session-Id: %s\r\n" % req["session"].encode() if req.get("session") else b""
         writer.write(b"POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\n"
-                     b"Content-Length: %d\r\nConnection: close\r\n\r\n%s"
-                     % (a.path.encode(), host.encode(), len(body), body))
+                     b"%sContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+                     % (a.path.encode(), host.encode(), sid, len(body), body))
         await writer.drain()
         head = await reader.readuntil(b"\r\n\r\n")
         row["head_ms"] = now_ms() - t0
@@ -234,7 +242,9 @@ def main():
     p.add_argument("--concurrency", type=int, help="동시 요청 수 (닫힌 루프)")
     p.add_argument("--duration", type=float, default=30, help="초 (도착을 만드는 시간)")
     p.add_argument("--warmup", type=float, default=10, help="초. 이 동안 보낸 요청은 요약에서 뺌")
-    p.add_argument("--conversations", type=int, default=32, help="시나리오 C의 대화 수")
+    p.add_argument("--conversations", type=int, default=32, help="시나리오 C의 대화 자리 수")
+    p.add_argument("--max-turns", type=int, default=6, help="시나리오 C: 대화 하나의 턴 수")
+    p.add_argument("--zipf", type=float, default=0.0, help="시나리오 C: 대화 선택 치우침 (0=균등)")
     p.add_argument("--abort-after-ms", type=float, default=0, help="요청 뒤 이만큼 지나면 끊음")
     p.add_argument("--max-inflight", type=int, default=2000)
     p.add_argument("--seed", type=int, default=1)
