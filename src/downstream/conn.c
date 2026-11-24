@@ -41,6 +41,9 @@
  * (D-043). */
 enum { CONN_KEEP_BUF = 64 * 1024 };
 
+/* v2에서 이벤트 하나가 한 연결에서 읽는 최대 횟수 (D-044). */
+enum { CONN_READS_PER_EVENT = 8 };
+
 /* 현재 연결 단계: 요청 받기, 응답 보내기, 닫힘. */
 typedef enum { CONN_READING, CONN_WRITING, CONN_FINISHED } conn_phase_t;
 
@@ -1443,7 +1446,13 @@ conn_status_t conn_on_event(conn_t *c, int fd, unsigned events, int64_t now_ms)
         return CONN_CLOSE;
     }
     /* 이미 버퍼에 들어온 파이프라인 요청도 읽기 이벤트를 다시 기다리지 않고 처리한다. */
-    for (int step = 0; step < 8; step++) {
+    /* 읽기는 이벤트 하나에 최대 8번(공정성)이다. 마지막 읽기에서 요청이 완성되면 커널에 읽을 것이
+     * 없어 새 이벤트가 오지 않으므로, 8번 뒤에 읽지 않고 파싱만 하는 단계를 한 번 더 둔다 (D-044).
+     */
+    for (int step = 0; step <= CONN_READS_PER_EVENT; step++) {
+        if (step == CONN_READS_PER_EVENT) {
+            events &= ~(unsigned)EV_READ;
+        }
         if (c->phase == CONN_WRITING) {
             return flush_response(c, now_ms);
         }
