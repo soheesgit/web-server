@@ -35,8 +35,9 @@ LLM 트래픽을 흉내 내 게이트웨이(httpd)를 재는 도구. `make test`
 | E0 | `python3 -I bench/run_bench.py e0` | 프록시가 더하는 TTFT·토큰 간격, 끊김 전파 (직접 / loop) |
 | E1 | `python3 -I bench/run_bench.py e1` | 오래 열린 스트림 동시성 (loop, 백엔드는 병목 아님) |
 | E2 | `python3 -I bench/run_bench.py scenario --name B --rate 3 --repeat 3` | 시나리오별 TTFT p50/p99, 백엔드별 분배 |
+| picker | `python3 -I bench/run_bench.py scenario --name C --picker bounded --conversations 8 --rate 0.3 --duration 240 --warmup 60 --repeat 3` | AI 라우팅(D-045): 캐시 적중, 넘침, 쏠림. 요약은 `bench/analyze.py <결과 폴더>` |
 
-게이트웨이는 기본 엔진인 이벤트 루프(loop)로 잰다. v1 스레드 풀은 비교할 때만
+게이트웨이는 설정에 `engine loop`를 넣어 이벤트 루프로 잰다. v1 스레드 풀은 비교할 때만
 `--engines loop pool`로 함께 돌린다.
 
 | 처리 능력 | `python3 -I bench/run_bench.py capacity --name A --rates 1 2 3 4` | 속도별 TTFT가 꺾이는 지점 |

@@ -280,7 +280,7 @@ def main():
     s2.add_argument("--engine", default="loop", choices=["loop", "pool"])
     s2.add_argument("--repeat", type=int, default=1)
     s2.add_argument("--warmup", type=float, default=10)
-    s2.add_argument("--picker", default="rr", help="rr | hash | bounded:<pct> (D-042)")
+    s2.add_argument("--picker", default="rr", help="rr | hash | bounded[:<pct>] (D-045)")
     s2.add_argument("--zipf", type=float, default=0.0, help="시나리오 C 대화 치우침")
     s2.add_argument("--conversations", type=int, default=32, help="시나리오 C 대화 자리 수")
     s3 = sub.add_parser("capacity")
