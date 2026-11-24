@@ -6,8 +6,6 @@
 # --- U-COM --- 계약 최소셋: common
 
 # --- U-DS --- 계약 최소셋: downstream
-U-DS-40
-U-DS-44
 
 # --- U-RT --- 계약 최소셋: router
 
