@@ -32,10 +32,13 @@
 
 ## 실행 설정
 
+이기종 백엔드를 사용하는 Reverse Proxy 실행 프로필은 Least Requests와 백엔드당 유휴 연결 8개를 적용한다. 로컬 백엔드 세 대를 시작한 뒤 저장소 루트에서 실행한다.
+
 ```sh
-make
-HTTPD_PROXY_LB=least_requests HTTPD_PROXY_RECOVERY=ramp ./build/httpd -c proxy.conf
+make reverse-proxy
 ```
+
+`conf/reverse-proxy.conf`는 127.0.0.1:8080에서 요청을 받고 8081~8083으로 중계한다. 배포 환경에서는 대상 리스너와 백엔드 주소를 설정하고 `pool_max_idle 8`을 명시한다. 별도 파일은 `make reverse-proxy REVERSE_PROXY_CONF=/path/to/reverse-proxy.conf`로 지정한다. `./build/httpd`를 직접 실행할 때 `HTTPD_PROXY_LB`를 생략하면 기존의 RR 기본값을 사용한다.
 
 `HTTPD_PROXY_LB`는 `rr`(기본), `least_requests`, `p2c`를 받는다. `HTTPD_PROXY_RECOVERY`는 `ramp`(기본), `single`을 받는다. `single`은 시험 요청 한 개가 성공하면 바로 정상으로 복귀한다. `pool_max_idle`은 기존 설정 파일의 유휴 상한이며 기본값은 8이다. `HTTPD_PROXY_METRICS=1`은 프로세스 종료 로그에 백엔드별 집계를 기록한다.
 

@@ -7,6 +7,7 @@ PYTHON       ?= python3
 CLANG_FORMAT ?= clang-format
 BUILD        ?= build
 PENDING      ?= tests/pending.txt
+REVERSE_PROXY_CONF ?= conf/reverse-proxy.conf
 UNAME_S      := $(shell uname -s)
 
 WARN      := -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror
@@ -41,9 +42,12 @@ FMT_FILES := $(wildcard src/*/*.c src/*/*.h tests/unit/*.c tests/unit/*.h \
 
 ONLY_ARG := $(if $(ONLY),--only $(ONLY),)
 
-.PHONY: all unit e2e test lint asan clean
+.PHONY: all reverse-proxy unit e2e test lint asan clean
 
 all: $(BIN)
+
+reverse-proxy: $(BIN)
+	exec env HTTPD_PROXY_LB=least_requests "$(BIN)" -c "$(REVERSE_PROXY_CONF)"
 
 $(BIN): $(LIB_OBJS) $(MAIN_OBJ)
 	@mkdir -p $(dir $@)
