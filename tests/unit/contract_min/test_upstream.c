@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -142,6 +143,7 @@ static void t_u_us_17(void)
         CHECK_EQ_STR(backend_hostport(b), want[i % 3]);
     }
     upstream_registry_free(reg);
+    free(cfg);
 }
 
 static void t_u_us_24(void)
@@ -198,6 +200,7 @@ static void t_u_us_24(void)
     CHECK(accept(lfd, NULL, NULL) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK));
     upstream_release(c2, false);
     upstream_registry_free(reg);
+    free(cfg);
     close(sfd);
     close(lfd);
 }

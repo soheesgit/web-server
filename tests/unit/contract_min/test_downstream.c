@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -309,6 +310,8 @@ static void t_u_ds_40(void)
     CHECK_EQ_STR(body + 4, "ok");
     conn_free(fx.c);
     close(fx.sv[1]);
+    router_free(fx.router);
+    free(fx.cfg);
 }
 
 static void t_u_ds_44(void)
@@ -328,6 +331,8 @@ static void t_u_ds_44(void)
     CHECK(strstr(resp, "\r\nConnection: close\r\n") != NULL);
     conn_free(fx.c);
     close(fx.sv[1]);
+    router_free(fx.router);
+    free(fx.cfg);
 }
 
 void register_downstream_tests(void)

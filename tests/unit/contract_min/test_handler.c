@@ -344,6 +344,7 @@ static void t_u_px_01(void)
     proxy_job_cleanup(&job);
     plan_cleanup(&p);
     upstream_registry_free(fx.reg);
+    free(fx.cfg);
 }
 
 static void t_u_px_05(void)
@@ -368,6 +369,7 @@ static void t_u_px_05(void)
     proxy_job_cleanup(&job);
     plan_cleanup(&p);
     upstream_registry_free(fx.reg);
+    free(fx.cfg);
 }
 
 static void t_u_px_07(void)
@@ -399,6 +401,7 @@ static void t_u_px_07(void)
     proxy_job_cleanup(&job);
     plan_cleanup(&p);
     upstream_registry_free(fx.reg);
+    free(fx.cfg);
 }
 
 static void t_u_px_10(void)
@@ -452,6 +455,7 @@ static void t_u_px_10(void)
     proxy_job_cleanup(&job);
     plan_cleanup(&p);
     upstream_registry_free(fx.reg);
+    free(fx.cfg);
 }
 
 void register_handler_tests(void)
