@@ -65,7 +65,7 @@ E2E 실행기는 `tests/e2e/run_e2e.py`를 그대로 쓴다 (`--tests`로 모듈
 | 관측 | 판단 근거 |
 | --- | --- |
 | 요청 `Content-Length: 1, 1`을 길이 1로 받는다 | RFC 9110 8.6절은 같은 값을 쉼표로 나열한 값을 거부하거나 값 하나로 바꿔도 된다(MAY)고 한다. 그래서 성질을 "모든 항목이 같은 값"으로 바꿨고 `1, 2`는 여전히 실패로 잡는다 |
-| 업스트림 상태 줄의 사유 문구에 맨 CR·NUL이 있어도 DONE | 클라이언트 쪽 상태 줄은 `response_writer.c`가 `http_reason(status)`로 새로 만들어 업스트림 사유 문구는 전달되지 않는다. 다만 RFC 9112 2.2절 문구("무효로 보거나 SP로 바꾼다")보다 느슨하다. 거부(502)로 바꿀지는 정하지 않았다 |
+| 업스트림 상태 줄의 사유 문구에 맨 CR·NUL이 있어도 DONE | 클라이언트 쪽 상태 줄은 `response_writer.c`가 `http_reason(status)`로 새로 만들어 업스트림 사유 문구는 전달되지 않는다. 다만 RFC 9112 2.2절 문구("무효로 보거나 SP로 바꾼다")보다 느슨하다. 관측되는 차이가 없어 거부(502)로 바꾸지 않고 그대로 두기로 했다 (2026-11-24 결정) |
 
 참고 자료 (확인 날짜 2026-11-24): [RFC 9110 8.6 Content-Length](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.6), [RFC 9112 2.2 Message Parsing](https://www.rfc-editor.org/rfc/rfc9112.html#section-2.2)
 
