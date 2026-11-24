@@ -66,6 +66,8 @@ static int group_init(struct upstream_group *g, struct upstream_registry *reg,
                       const upstream_conf_t *uc, char *err, size_t errcap)
 {
     g->reg = reg;
+    g->picker = uc->picker;
+    g->bound_pct = uc->bound_pct;
     (void)snprintf(g->name, sizeof(g->name), "%s", uc->name);
     g->backends = calloc(uc->n_backends, sizeof(*g->backends));
     if (g->backends == NULL || pthread_mutex_init(&g->mu, NULL) != 0) {
@@ -81,6 +83,7 @@ static int group_init(struct upstream_group *g, struct upstream_registry *reg,
 
         b->group = g;
         (void)snprintf(b->hostport, sizeof(b->hostport), "%s:%u", bc->host, (unsigned)bc->port);
+        b->name_hash = upstream_hash(b->hostport, strlen(b->hostport));
         if (reg->max_idle > 0) {
             b->idle = calloc(reg->max_idle, sizeof(*b->idle));
             if (b->idle == NULL) {

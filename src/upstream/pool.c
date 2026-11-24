@@ -28,6 +28,14 @@ static void conn_destroy(upstream_conn_t *c)
     errno = e;
 }
 
+/* 처리 중 요청 수: 빌려 간 연결 하나 = 요청 하나 (picker가 본다). */
+static void count_inflight(struct backend *b, int d)
+{
+    pthread_mutex_lock(&b->group->mu);
+    b->inflight += d;
+    pthread_mutex_unlock(&b->group->mu);
+}
+
 /* 최근 반납한 유휴 연결부터 꺼낸다. 없으면 NULL. */
 static upstream_conn_t *pop_idle(struct backend *b)
 {
@@ -84,6 +92,7 @@ int upstream_acquire(upstream_group_t *g, backend_t *b, upstream_conn_t **out_c)
             c->reused = true;
             c->connecting = false;
             buf_reset(&c->rbuf);
+            count_inflight(b, 1);
             *out_c = c;
             return 0;
         }
@@ -100,6 +109,7 @@ int upstream_acquire(upstream_group_t *g, backend_t *b, upstream_conn_t **out_c)
         conn_destroy(c);
         return -1;
     }
+    count_inflight(b, 1);
     *out_c = c;
     return 0;
 }
@@ -132,6 +142,7 @@ void upstream_release(upstream_conn_t *c, bool reusable)
         return;
     }
     b = c->backend;
+    count_inflight(b, -1);
     if (reusable && !c->connecting) {
         buf_reset(&c->rbuf);
         pthread_mutex_lock(&b->group->mu);

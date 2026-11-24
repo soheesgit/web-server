@@ -155,6 +155,34 @@ struct upstream_group *upstream_lookup_cb(void *ctx, const char *name);
 backend_t *upstream_pick(upstream_group_t *g, const backend_t *exclude, int64_t now_ms);
 
 /**
+ * 고정 키로 백엔드를 고른다 (D-042 제안).
+ *
+ * 그룹의 picker 설정에 따라:
+ *   - RR이거나 key_len이 0이면 upstream_pick(g, exclude, now_ms)와 같다.
+ *   - HASH: 후보(제외 중이 아니고 exclude가 아닌 백엔드) 중 rendezvous 점수
+ *     hash(key) ⊕ hash(hostport)를 섞은 값이 가장 큰 백엔드. 같은 키는 후보가 같으면 항상 같은 곳.
+ *   - BOUNDED: 상한 = 올림((후보들의 처리 중 수 합 + 1) × bound_pct / (100 × 후보 수)).
+ *     점수 순서대로 보며 처리 중 수가 상한보다 적은 첫 후보. 그런 후보는 항상 있다.
+ * 처리 중 수는 upstream_acquire~upstream_release 사이의 연결 수다. 후보가 없으면 NULL.
+ *
+ * @param g        그룹. NULL 불가
+ * @param key      고정 키 바이트 (대화 ID 등). key_len이 0이면 NULL 허용
+ * @param key_len  키 길이
+ * @param exclude  건너뛸 백엔드. NULL 허용
+ * @param now_ms   현재 단조 시각
+ * @return         백엔드, 없으면 NULL
+ *
+ * 에러:    없음
+ * 소유권:  레지스트리를 빌린 포인터
+ * 스레드:  [thread-safe]
+ * I/O:     없음
+ * 블로킹:  짧은 mutex
+ * 테스트:  bench (시나리오 C) · 추후 단위 테스트
+ */
+backend_t *upstream_pick_key(upstream_group_t *g, const char *key, size_t key_len,
+                             const backend_t *exclude, int64_t now_ms);
+
+/**
  * 그룹의 백엔드 수를 돌려준다.
  *
  * @param g  그룹. NULL 불가
