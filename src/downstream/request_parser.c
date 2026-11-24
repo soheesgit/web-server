@@ -32,12 +32,11 @@ static bool is_digits(const char *p, size_t n)
     return true;
 }
 
-/* 머리 끝을 못 찾았을 때: 요청 라인이 끝나지 않은 채 max_uri + 16바이트를 넘었는가. */
+/* 머리 한도를 넘기기 전에 있든, 같은 read에 있든 대상 토큰 길이를 확인한다. */
 static bool request_line_too_long(const char *p, size_t len, size_t max_uri)
 {
     size_t i = 0;
-
-    while (i < len) { /* 앞 빈 줄 */
+    while (i < len) {
         if (p[i] == '\n') {
             i++;
         } else if (p[i] == '\r' && i + 1 < len && p[i + 1] == '\n') {
@@ -46,7 +45,19 @@ static bool request_line_too_long(const char *p, size_t len, size_t max_uri)
             break;
         }
     }
-    return memchr(p + i, '\n', len - i) == NULL && len - i > max_uri + 16;
+    if (i == len) {
+        return false;
+    }
+    const char *start = p + i;
+    const char *lf = memchr(start, '\n', len - i);
+    const char *end = lf == NULL ? p + len : lf;
+    const char *space = memchr(start, ' ', (size_t)(end - start));
+    if (space == NULL || !http_token_valid((str_t){start, (size_t)(space - start)})) {
+        return false;
+    }
+    start = space + 1;
+    space = memchr(start, ' ', (size_t)(end - start));
+    return (size_t)((space == NULL ? end : space) - start) > max_uri;
 }
 
 /* "메서드 SP 대상 SP 버전"을 셋으로 나눈다. 정확히 SP 두 개로 나뉜 비지 않은 세 토큰만 허용. */
