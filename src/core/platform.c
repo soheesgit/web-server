@@ -122,9 +122,14 @@ ssize_t platform_sendfile(int out_fd, int in_fd, off_t *inout_off, size_t count)
     }
 #elif defined(__APPLE__)
     {
-        off_t sent = 0;
+        /* macOS sendfile의 len은 입력이 보낼 양, 출력이 보낸 양이다. 입력 0은 "파일 끝까지"라서
+         * count를 넣어야 한다. sendfile에는 MSG_NOSIGNAL이 없어 SO_NOSIGPIPE로 SIGPIPE를 막는다 */
+        off_t sent;
+        int one = 1;
         int rc;
+        (void)setsockopt(out_fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
         do {
+            sent = (off_t)count;
             rc = sendfile(in_fd, out_fd, *inout_off, &sent, NULL, 0);
         } while (rc < 0 && errno == EINTR && sent == 0);
         if (sent > 0) {
