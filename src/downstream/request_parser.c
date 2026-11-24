@@ -150,8 +150,13 @@ static int parse_target(str_t target, http_request_t *req, target_form_t *out_fo
     } else {
         return 400;
     }
-    if (uri_split(rest, &req->raw_path, &req->query) != 0 ||
-        uri_decode_path(req->raw_path, req->path, sizeof(req->path), NULL) != 0 ||
+    if (uri_split(rest, &req->raw_path, &req->query) != 0) {
+        return 400;
+    }
+    if (req->raw_path.len == 0 && *out_form == TARGET_ABSOLUTE) {
+        req->raw_path = str_from_cstr("/");
+    }
+    if (uri_decode_path(req->raw_path, req->path, sizeof(req->path), NULL) != 0 ||
         path_normalize(req->path) != 0) {
         return 400;
     }

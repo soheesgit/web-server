@@ -55,11 +55,8 @@ int uri_parse_absolute(str_t target, str_t *out_authority, str_t *out_rest)
     while (i < target.len && target.ptr[i] != '/' && target.ptr[i] != '?' && target.ptr[i] != '#') {
         i++;
     }
-    if (i == scheme_len || memchr(target.ptr + scheme_len, '@', i - scheme_len) != NULL) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (i < target.len && target.ptr[i] != '/') {
+    if (i == scheme_len || memchr(target.ptr + scheme_len, '@', i - scheme_len) != NULL ||
+        memchr(target.ptr + i, '#', target.len - i) != NULL) {
         errno = EINVAL;
         return -1;
     }

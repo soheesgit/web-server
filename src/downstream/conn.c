@@ -51,6 +51,7 @@ struct conn {
     response_plan_t plan;      /* 현재 요청의 계획 */
     proxy_job_t job;           /* 현재 요청의 프록시 작업 */
     size_t up_head_len;        /* BODY_UPSTREAM: uc->rbuf 앞의 응답 머리 길이 */
+    uint16_t forward_port;     /* 로컬 리스너의 absolute-form 프록시 사용 */
     bool client_canceled;      /* 클라이언트가 업스트림 대기 중 종료 */
     bool up_reusable; /* BODY_UPSTREAM: 업스트림 응답이 연결 재사용을 허용 */
 };
@@ -821,6 +822,43 @@ static int recv_body(conn_t *c, http_request_t *req)
     return 1;
 }
 
+/* 숫자 루프백 주소와 단일 업스트림의 포트를 연결을 열기 전에 대조한다. */
+static int forward_allowed(const conn_t *c, const http_request_t *req, const route_t *rt)
+{
+    const str_t authority = req->host;
+    static const char loopback[] = "127.0.0.1";
+    size_t host_len = sizeof(loopback) - 1;
+    if (c->forward_port == 0 || strcmp(c->ip, loopback) != 0) {
+        return 403;
+    }
+    if (req->method != HTTP_GET && req->method != HTTP_POST) {
+        return 405;
+    }
+    if (authority.len < host_len || memcmp(authority.ptr, loopback, host_len) != 0 ||
+        (authority.len > host_len && authority.ptr[host_len] != ':')) {
+        return 403;
+    }
+    uint64_t port = 80;
+    if (authority.len > host_len) {
+        str_t port_text = {authority.ptr + host_len + 1, authority.len - host_len - 1};
+        if (str_to_u64(port_text, 65535, &port) != 0 || port == 0) {
+            return 400;
+        }
+    }
+    if (port != c->forward_port || port == c->server_port || rt == NULL ||
+        rt->kind != ROUTE_PROXY || rt->host == NULL || strcmp(rt->host, loopback) != 0 ||
+        upstream_backend_count(rt->upstream) != 1) {
+        return 403;
+    }
+    backend_t *b = upstream_pick(rt->upstream, NULL, platform_now_ms());
+    if (b == NULL) {
+        return 503;
+    }
+    char endpoint[sizeof(loopback) + 6];
+    (void)snprintf(endpoint, sizeof(endpoint), "%s:%u", loopback, (unsigned)port);
+    return strcmp(backend_hostport(b), endpoint) == 0 ? 0 : 403;
+}
+
 /* 계획을 만든다: 라우팅 → 처리기 → (프록시 루프) → (CGI 머리). */
 static void build_plan(conn_t *c, const http_request_t *req, size_t *out_cgi_body_off)
 {
@@ -828,6 +866,22 @@ static void build_plan(conn_t *c, const http_request_t *req, size_t *out_cgi_bod
     handler_ctx_t ctx;
 
     *out_cgi_body_off = 0;
+    if (req->target.ptr[0] != '/') {
+        int status = forward_allowed(c, req, rt);
+        if (status != 0) {
+            (void)plan_error(&c->plan, status);
+            if (status == 405) {
+                (void)plan_add_header(&c->plan, "Allow", "GET, POST");
+            }
+            return;
+        }
+        /* Absolute-form은 원 URL의 경로와 query를 그대로 전달한다. */
+        route_t forward = *rt;
+        forward.keep_host = true;
+        forward.strip_prefix = false;
+        proxy_run(c, req, &forward);
+        return;
+    }
     if (rt == NULL) {
         plan_error(&c->plan, 404);
         return;
@@ -949,6 +1003,12 @@ conn_t *conn_new(int fd, const struct sockaddr_storage *peer, const conn_env_t *
     }
     c->fd = -1; /* 실패 시 conn_free가 호출자의 fd를 닫지 않게 */
     c->env = env;
+    const char *forward = getenv("HTTPD_FORWARD_PROXY");
+    uint64_t forward_port;
+    if (forward != NULL && strcmp(env->cfg->listen_host, "127.0.0.1") == 0 &&
+        str_to_u64(str_from_cstr(forward), 65535, &forward_port) == 0) {
+        c->forward_port = (uint16_t)forward_port;
+    }
     plan_init(&c->plan);
     if (set_mode(fd, env->nonblocking) != 0 ||
         buf_init(&c->rbuf, 4096, env->lim->max_head + (size_t)env->lim->max_body) != 0 ||
