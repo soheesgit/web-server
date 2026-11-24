@@ -1,7 +1,7 @@
 # upstream/
 
 ## 책임
-백엔드 쪽 면이다: 백엔드 레지스트리·그룹·상태(연속 실패, 제외), 라운드로빈 선택, 연결 획득·반납(유휴 연결 풀), 업스트림 요청 직렬화(origin-form, hop-by-hop 제거, X-Forwarded-* 추가), 응답 머리 파싱, 그리고 프록시의 기다림이 있는 I/O(연결 획득, 요청 송신, 응답 머리 수신) 실행. 재시도 판단과 응답 본문 중계는 하지 않는다.
+백엔드 쪽 면이다: 백엔드 레지스트리·그룹·상태(연속 실패, 제외), RR·Least Requests·P2C 선택, 연결 획득·반납(유휴 연결 풀), 업스트림 요청 직렬화(origin-form, hop-by-hop 제거, X-Forwarded-* 추가), 응답 머리 파싱, 그리고 프록시의 기다림이 있는 I/O(연결 획득, 요청 송신, 응답 머리 수신) 실행. 재시도 판단과 응답 본문 중계는 하지 않는다.
 
 ## 알아도 되는 것 / 몰라야 하는 것
 | 알아도 되는 것 | 몰라야 하는 것 |
@@ -38,10 +38,12 @@
 
 ## 구현 단계
 4단계 (`upstream` + `handler` PROXY). 분담: A `request_writer`, `response_parser` · B `pool`, `lb` · C `backend`, `relay`. 7단계(선택) C `relay` 이벤트 경로.
-- [ ] request_writer
-- [ ] response_parser
-- [ ] backend
-- [ ] lb
-- [ ] pool
-- [ ] relay — blocking (v1)
+- [x] request_writer
+- [x] response_parser
+- [x] backend
+- [x] lb
+- [x] pool
+- [x] relay — blocking (v1)
 - [ ] relay — 상태 머신 (v2)
+
+v1에서 백엔드 예약과 활성 요청 증가를 그룹 mutex로 함께 보호한다. 풀은 단조 시계로 유휴 연결을 만료시키며, 레지스트리가 정리 스레드를 소유한다. 설정과 장애 정책은 [Stage 4 운영 문서](../../docs/PROXY_STAGE4.md), 계약 정합성은 D-041을 참고한다.
