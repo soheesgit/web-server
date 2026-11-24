@@ -8,7 +8,7 @@
 | --- | --- | --- | --- | --- |
 | 기능 (E2E) | **현재** | `E-<분류>-NN` (ST·CG·PX·KA·ER·SL·CF), 68개 | `tests/e2e/test_*.py` | `make e2e` |
 | 계약 최소셋 | **현재** | `U-<영역>-NN` 중 56개 | `tests/unit/contract_min/test_<영역>.c` | `make unit` |
-| 추가 계약 | **현재** | Stage 1의 `U-CORE-*` 8개와 `U-COM-*` 5개, Stage 3의 `U-HD-19` | `tests/unit/contract_min/` | `make unit` |
+| 추가 계약 | **현재** | Stage 1의 `U-CORE-*` 8개와 `U-COM-*` 5개, Stage 3의 `U-HD-19`, Stage 5의 `U-EN-03` | `tests/unit/contract_min/` | `make unit` |
 | 단위 (나머지) | 추후 | `U-<영역>-NN` | `tests/unit/` | `make unit` |
 | 경계 | 추후 | `C-NN` | (추후 `tests/contract/`) | — |
 | 비기능 | 추후 | `N-<분류>-NN` | (추후 `tests/nonfunc/`) | — |
@@ -58,6 +58,8 @@ FAIL             E-PX-03  hop-by-hop removed  (expected 200, got 502)
 - **run_e2e** (Python 표준 라이브러리만): 테스트당 30초 제한. 예외·타임아웃·`ServerStartError`는 실패다. 응답 파서는 `http.client`를 쓰지 않고 직접 구현했다(비정상 응답을 감추지 않도록).
 
 E2E 공통 판정: `harness.Server`가 끝날 때 서버가 살아 있는지, 좀비 자식이 없는지, (Linux에서) 열린 fd 수가 시작 때로 돌아왔는지 확인하고 어기면 그 테스트는 실패다. 프록시 테스트는 백엔드당 유휴 연결 상한만큼 fd 여유를 둔다.
+
+Stage 5 프로세스 검증은 `python3 tests/bench/worker_verify.py`로 실행한다. 스레드 풀 과부하, 시그널 종료, FD 한도 복구를 루프백에서 재현한다.
 
 ## 4. fake와 fixture
 
