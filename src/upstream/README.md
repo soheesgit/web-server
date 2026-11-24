@@ -44,4 +44,4 @@
 - [x] lb
 - [x] pool
 - [x] relay — blocking (v1)
-- [ ] relay — 상태 머신 (v2)
+- [x] relay — 상태 머신 (v2)

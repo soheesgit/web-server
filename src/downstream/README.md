@@ -40,7 +40,7 @@
 - [x] response_writer
 - [x] listener
 - [x] conn — blocking 경로 (v1)
-- [ ] conn — 이벤트 경로 (v2)
+- [x] conn — 이벤트 경로 (v2)
 
 Stage 2에서는 `U-DS-01`, `06`, `07`, `12`, `22`, `27`, `28`, `30`, `36`이 통과한다. `U-DS-40`과 `U-DS-44`는 이벤트 경로와 실제 라우터·STATIC 처리기가 필요하다.
 
