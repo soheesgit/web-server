@@ -20,7 +20,6 @@ U-PX-07
 U-PX-10
 
 # --- U-US --- 계약 최소셋: upstream
-U-US-24
 
 # --- U-EN --- 계약 최소셋: engine
 U-EN-01
