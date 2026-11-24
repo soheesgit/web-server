@@ -178,6 +178,8 @@ upstream_registry_t *upstream_registry_new(const config_t *cfg, char *err, size_
             g->rng = 1;
         }
         g->ramp = recovery == NULL || strcmp(recovery, "ramp") == 0;
+        g->picker = conf->picker;
+        g->bound_pct = conf->bound_pct;
         for (size_t j = 0; j < g->count; j++) {
             if (resolve_backend(&g->backends[j], g, &conf->backends[j], err, errcap) != 0) {
                 upstream_registry_free(reg);
