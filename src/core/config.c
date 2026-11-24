@@ -336,6 +336,41 @@ static int parse_upstream(cfg_ctx_t *c, const str_t *tok, size_t n)
     return 0;
 }
 
+/* picker <그룹> rr | hash | bounded <pct>  (D-042 제안). 그룹은 먼저 정의되어 있어야 한다. */
+static int parse_picker(cfg_ctx_t *c, const str_t *tok, size_t n)
+{
+    upstream_conf_t *u = NULL;
+    uint64_t pct = 0;
+
+    if (n < 3) {
+        return cfg_fail_at(c, c->line, EINVAL, "picker: expected 'picker <upstream> <kind>'");
+    }
+    for (size_t i = 0; i < c->cfg->n_upstreams; i++) {
+        if (str_eq(tok[1], c->cfg->upstreams[i].name)) {
+            u = &c->cfg->upstreams[i];
+        }
+    }
+    if (u == NULL) {
+        return cfg_fail_at(c, c->line, EINVAL, "picker: unknown upstream '%.*s'", pf_len(tok[1]),
+                           tok[1].ptr);
+    }
+    if (n == 3 && str_eq(tok[2], "rr")) {
+        u->picker = CFG_PICK_RR;
+    } else if (n == 3 && str_eq(tok[2], "hash")) {
+        u->picker = CFG_PICK_HASH;
+    } else if (n == 4 && str_eq(tok[2], "bounded") && parse_uint(tok[3], 10000, &pct) == 0 &&
+               pct > 100) {
+        u->picker = CFG_PICK_BOUNDED;
+        u->bound_pct = (int)pct;
+        return 0;
+    } else {
+        return cfg_fail_at(c, c->line, EINVAL,
+                           "picker: expected rr, hash or 'bounded <pct over 100>'");
+    }
+    u->bound_pct = 0;
+    return 0;
+}
+
 /* 한 줄의 토큰들을 지시어로 적용한다. n ≥ 1. */
 static int apply_directive(cfg_ctx_t *c, const str_t *tok, size_t n)
 {
@@ -348,6 +383,9 @@ static int apply_directive(cfg_ctx_t *c, const str_t *tok, size_t n)
     }
     if (str_eq(d, "route")) {
         return parse_route(c, tok, n, no_host);
+    }
+    if (str_eq(d, "picker")) {
+        return parse_picker(c, tok, n);
     }
     if (str_eq(d, "host")) {
         if (n < 3 || !str_eq(tok[2], "route")) {

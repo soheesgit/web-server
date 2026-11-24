@@ -25,6 +25,7 @@
  *              / "engine" WS ( "pool" / "loop" )
  *              / "workers" WS uint
  *              / "upstream" WS name 1*( WS hostport )
+ *              / "picker" WS name WS ( "rr" / "hash" / "bounded" WS uint )   ; D-042 (제안)
  *              / route
  *              / "host" WS hostname WS route
  *              / knob WS uint
@@ -110,6 +111,20 @@ typedef struct {
 } backend_conf_t;
 
 /**
+ * 그룹 안에서 백엔드를 고르는 방식 (picker 지시어, D-042 제안).
+ *
+ * 생성:   config_defaults(RR), picker 지시어
+ * 소멸:   없음
+ * 수명:   없음
+ * 스레드: 값 타입
+ */
+typedef enum {
+    CFG_PICK_RR,     /* 라운드로빈 (기본) */
+    CFG_PICK_HASH,   /* 고정 키의 rendezvous hashing, 부하 상한 없음 */
+    CFG_PICK_BOUNDED /* 고정 키의 rendezvous hashing + 부하 상한 (bound_pct) */
+} cfg_picker_t;
+
+/**
  * 이름 붙은 백엔드 그룹 (upstream 지시어 한 줄).
  *
  * 생성:   config_load
@@ -121,6 +136,9 @@ typedef struct {
     char name[CFG_NAME_MAX]; /* 그룹 이름, NUL 종료, 설정 안에서 유일 */
     backend_conf_t backends[CFG_MAX_BACKENDS]; /* 설정에 나온 순서 (라운드로빈 순서) */
     size_t n_backends;                         /* 1~CFG_MAX_BACKENDS */
+    cfg_picker_t picker; /* 기본 CFG_PICK_RR. picker 지시어는 upstream 정의 뒤에 온다 */
+    int bound_pct; /* CFG_PICK_BOUNDED: 상한 = 올림(평균 처리 중 수 × bound_pct / 100).
+                      101 이상 (예: 125). 그 밖에는 0 */
 } upstream_conf_t;
 
 /**
