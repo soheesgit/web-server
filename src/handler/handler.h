@@ -284,4 +284,35 @@ int proxy_on_head(proxy_job_t *job, struct upstream_conn *c, const http_response
  */
 void proxy_job_cleanup(proxy_job_t *job);
 
+/**
+ * 업스트림 본문 바이트를 포워드 응답 캐시에 복사해 둔다 (D-042). job->fill이 없으면 아무 일도 없다.
+ * conn이 클라이언트로 보내는 본문 조각마다 부른다 (같은 바이트를 한 번만).
+ *
+ * @param job  작업. NULL 허용
+ * @param p    본문 바이트 (이번 응답에 속한 것만)
+ * @param n    바이트 수
+ *
+ * 에러:    없음 (복사에 실패하거나 선언 길이를 넘으면 저장을 포기)
+ * 소유권:  p를 빌림
+ * 스레드:  [per-object]
+ * I/O:     없음
+ * 블로킹:  없음
+ * 테스트:  E-FW-02~E-FW-07
+ */
+void proxy_body_tee(proxy_job_t *job, const char *p, size_t n);
+
+/**
+ * 업스트림 본문이 끝까지 왔다고 알린다. 모은 바이트가 선언한 길이와 같으면 캐시에 저장한다.
+ *
+ * @param job  작업. NULL 허용
+ *
+ * 에러:    없음
+ * 소유권:  없음
+ * 스레드:  [per-object] (저장소는 내부 뮤텍스로 보호)
+ * I/O:     없음
+ * 블로킹:  없음
+ * 테스트:  E-FW-02~E-FW-07
+ */
+void proxy_body_done(proxy_job_t *job);
+
 #endif

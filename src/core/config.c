@@ -47,6 +47,8 @@ void config_defaults(config_t *out_cfg)
     out_cfg->backend_cooldown_ms = 10000;
     out_cfg->pool_max_idle = 8;
     out_cfg->shutdown_grace_ms = 5000;
+    out_cfg->cache_max_bytes = 8388608;
+    out_cfg->cache_entry_max = 1048576;
 
     cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     if (cpu_count < 1) {
@@ -163,7 +165,7 @@ static int parse_knob(config_t *cfg, const char *key, const char *value)
     } else if (strcmp(key, "max_body") == 0) {
         max = UINT64_MAX;
     }
-    if (parse_uint(value, max, &n) != 0 || n == 0) {
+    if (parse_uint(value, max, &n) != 0 || (n == 0 && strcmp(key, "cache_max_bytes") != 0)) {
         return -1;
     }
 #define SET_INT(k, field)                                                                          \
@@ -185,6 +187,8 @@ static int parse_knob(config_t *cfg, const char *key, const char *value)
     SET_INT("backend_cooldown_ms", backend_cooldown_ms)
     SET_INT("pool_max_idle", pool_max_idle)
     SET_INT("shutdown_grace_ms", shutdown_grace_ms)
+    SET_INT("cache_max_bytes", cache_max_bytes)
+    SET_INT("cache_entry_max", cache_entry_max)
 #undef SET_INT
     if (strcmp(key, "max_head") == 0)
         cfg->max_head = (size_t)n;

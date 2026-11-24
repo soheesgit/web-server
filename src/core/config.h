@@ -43,8 +43,9 @@
  *              / "max_keepalive_requests" / "cgi_timeout_ms" / "cgi_max_head"
  *              / "upstream_connect_timeout_ms" / "upstream_response_timeout_ms"
  *              / "backend_fail_threshold" / "backend_cooldown_ms" / "pool_max_idle"
- *              / "shutdown_grace_ms"
+ *              / "shutdown_grace_ms" / "cache_max_bytes" / "cache_entry_max"
  *   knob 이름은 config_t 필드 이름과 같다. 시간은 ms, 크기는 바이트, 0은 허용하지 않는다.
+ *   단, cache_max_bytes 0은 포워드 응답 캐시를 끈다 (D-042).
  *   단일 값 지시어가 반복되면 마지막 값. upstream·route·host는 나온 순서대로 누적한다.
  *
  * 예:
@@ -179,8 +180,10 @@ typedef struct {
     int backend_cooldown_ms;          /* 제외 유지 시간 (ms). 기본 10000 */
     int pool_max_idle;                /* 백엔드당 유휴 연결 상한. 기본 8 */
     int shutdown_grace_ms;            /* 종료 시 진행 중 연결 유예 (ms). 기본 5000 */
-    char access_log[CFG_PATH_MAX];    /* 접근 로그 경로. 빈 문자열이면 stderr */
-    char error_log[CFG_PATH_MAX];     /* 에러 로그 경로. 빈 문자열이면 stderr */
+    int cache_max_bytes; /* 포워드 응답 캐시의 총 바이트 상한. 0이면 끔. 기본 8388608 (D-042) */
+    int cache_entry_max; /* 캐시 항목 하나의 본문 상한 (바이트). 기본 1048576 */
+    char access_log[CFG_PATH_MAX]; /* 접근 로그 경로. 빈 문자열이면 stderr */
+    char error_log[CFG_PATH_MAX];  /* 에러 로그 경로. 빈 문자열이면 stderr */
     upstream_conf_t upstreams[CFG_MAX_UPSTREAMS]; /* 설정 순서 */
     size_t n_upstreams;                           /* 0~CFG_MAX_UPSTREAMS */
     route_conf_t routes[CFG_MAX_ROUTES];          /* 설정 순서 */

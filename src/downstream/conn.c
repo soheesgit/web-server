@@ -775,9 +775,11 @@ static int send_upstream_body(conn_t *c)
                 break;
             }
             c->response_bytes += used;
+            proxy_body_tee(&c->job, uc->rbuf.data, used); /* 포워드 캐시용 복사 (D-042) */
             buf_consume(&uc->rbuf, used);
         }
         if (result == BODY_DONE) {
+            proxy_body_done(&c->job);
             reusable = reusable && uc->rbuf.len == 0;
             upstream_release(uc, reusable);
             c->plan.body.upstream.conn = NULL;
@@ -1052,7 +1054,9 @@ static int upstream_pull(conn_t *c)
     }
     c->up_pending = used;
     c->response_bytes += used;
+    proxy_body_tee(&c->job, uc->rbuf.data, used); /* 포워드 캐시용 복사 (D-042) */
     if (result == BODY_DONE) {
+        proxy_body_done(&c->job);
         c->up_reuse = c->upstream_keep_alive;
         return 2;
     }
