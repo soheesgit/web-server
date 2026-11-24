@@ -54,8 +54,15 @@ relay_t *relay_start(proxy_job_t *job, const http_limits_t *lim, int64_t now_ms,
     /* 직렬화 전인 요청은 먼저 대상을 예약한다. 이미 직렬화된 요청은 기존 대상을 유지한다. */
     bool deferred = job->request.len == 0;
     backend_t *selected = NULL;
-    if (upstream_checkout(job->group, deferred ? NULL : job->backend,
-                          deferred ? job->backend : NULL, &selected, &r->conn) != 0) {
+    backend_t *pinned = deferred ? NULL : job->backend;
+    /* AI 라우팅(D-045): picker 그룹의 첫 시도는 고정 키로 고른다. 재시도는 정책 그대로 */
+    if (deferred && job->backend == NULL && job->affinity_key.len > 0 &&
+        job->group->picker != CFG_PICK_RR) {
+        pinned = upstream_pick_key(job->group, job->affinity_key.ptr, job->affinity_key.len, NULL,
+                                   now_ms);
+    }
+    if (upstream_checkout(job->group, pinned, deferred ? job->backend : NULL, &selected,
+                          &r->conn) != 0) {
         r->phase = FAILED;
         r->why = PFAIL_CONNECT;
     } else {

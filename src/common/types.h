@@ -296,6 +296,7 @@ typedef struct {
     bool sent_any; /* 현재 시도에서 요청을 1바이트라도 보냈는가 (relay가 갱신) */
     int client_minor;       /* 클라이언트 HTTP/1.minor */
     bool client_keep_alive; /* 클라이언트 연결 유지 여부 */
+    str_t affinity_key; /* AI 라우팅 고정 키(X-Session-Id). 요청을 빌림. 없으면 길이 0 */
 } proxy_job_t;
 
 #endif
