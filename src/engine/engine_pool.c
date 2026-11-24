@@ -6,6 +6,7 @@
 
 #include "core/log.h"
 #include "core/platform.h"
+#include "engine/internal_loop.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -27,6 +28,7 @@ typedef struct {
 
 struct engine {
     engine_kind_t kind;
+    loop_t *loop; /* EVENT_LOOP이면 루프, THREAD_POOL이면 NULL (아래 필드는 v1 전용) */
     const engine_callbacks_t *cb;
     void *ctx;
     int workers;
@@ -68,15 +70,22 @@ engine_t *engine_new(engine_kind_t kind, int workers, int queue_len, const engin
         errno = EINVAL;
         return NULL;
     }
-    if (kind != ENGINE_THREAD_POOL) {
-        errno = ENOSYS; /* v2 이벤트 루프는 아직 */
-        return NULL;
-    }
     e = calloc(1, sizeof(*e));
     if (e == NULL) {
         return NULL;
     }
     e->kind = kind;
+    if (kind == ENGINE_EVENT_LOOP) {
+        e->loop = loop_new(cb, ctx);
+        if (e->loop == NULL) {
+            int err = errno;
+
+            free(e);
+            errno = err;
+            return NULL;
+        }
+        return e;
+    }
     e->cb = cb;
     e->ctx = ctx;
     e->workers = workers;
@@ -271,6 +280,9 @@ static void drain(engine_t *e, int grace_ms)
 
 int engine_run(engine_t *e, int listen_fd, volatile sig_atomic_t *stop, int shutdown_grace_ms)
 {
+    if (e->loop != NULL) {
+        return loop_run(e->loop, listen_fd, stop, shutdown_grace_ms);
+    }
     if (start_workers(e) != 0) {
         int err = errno;
 
@@ -305,6 +317,12 @@ void engine_free(engine_t *e)
     if (e == NULL) {
         return;
     }
+    if (e->loop != NULL) {
+        loop_free(e->loop);
+        free(e);
+        errno = err;
+        return;
+    }
     stop_workers(e);
     pthread_cond_destroy(&e->cv_work);
     pthread_mutex_destroy(&e->mu);
@@ -313,4 +331,9 @@ void engine_free(engine_t *e)
     free(e->threads);
     free(e);
     errno = err;
+}
+
+loop_t *engine_loop_of(engine_t *e)
+{
+    return e->loop;
 }
