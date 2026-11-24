@@ -41,6 +41,8 @@ struct upstream_group {
     up_policy_t policy;
     uint64_t rng;
     bool ramp;
+    cfg_picker_t picker; /* 고정 키 경로(lb_key.c). 기본 CFG_PICK_RR = 위 policy만 씀 */
+    int bound_pct;       /* CFG_PICK_BOUNDED의 상한 % */
 };
 
 /** 그룹 lock을 잡은 호출자가 시도 가능 여부를 확인한다. */
