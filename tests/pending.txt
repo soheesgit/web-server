@@ -14,10 +14,6 @@ U-DS-44
 # --- U-HD --- 계약 최소셋: handler (plan·static·cgi)
 
 # --- U-PX --- 계약 최소셋: handler (proxy)
-U-PX-01
-U-PX-05
-U-PX-07
-U-PX-10
 
 # --- U-US --- 계약 최소셋: upstream
 
