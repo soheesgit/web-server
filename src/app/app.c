@@ -42,6 +42,33 @@ static void close_conn(void *ctx, void *obj)
     conn_free(obj);
 }
 
+static int update_conn(app_t *a, conn_t *c, conn_status_t next)
+{
+    if (next == CONN_CLOSE) {
+        return -1;
+    }
+    if (next == CONN_WAIT_FD) {
+        return 0; /* conn이 추가 fd와 클라이언트 취소 감시를 설정했다. */
+    }
+    return engine_watch(a->engine, conn_fd(c), next == CONN_WANT_READ ? EV_READ : EV_WRITE, c);
+}
+
+static int event_conn(void *ctx, void *obj, int fd, unsigned events, int64_t now)
+{
+    return update_conn(ctx, obj, conn_on_event(obj, fd, events, now));
+}
+
+static int timeout_conn(void *ctx, void *obj, int64_t now)
+{
+    return update_conn(ctx, obj, conn_on_timeout(obj, now));
+}
+
+static int64_t deadline_conn(void *ctx, void *obj)
+{
+    (void)ctx;
+    return conn_deadline_ms(obj);
+}
+
 static void reject_busy(void *ctx, int fd)
 {
     static const char response[] =
@@ -65,6 +92,9 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
     static const engine_callbacks_t callbacks = {
         .on_accept = accept_conn,
         .serve_blocking = serve_conn,
+        .on_event = event_conn,
+        .on_timeout = timeout_conn,
+        .deadline_ms = deadline_conn,
         .on_close = close_conn,
         .on_busy = reject_busy,
     };
@@ -94,8 +124,7 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
     a->engine = engine_new(kind, cfg->workers, cfg->queue_len, &callbacks, a);
     if (a->engine == NULL) {
         if (errcap > 0) {
-            (void)snprintf(err, errcap, "engine: %s",
-                           kind == ENGINE_EVENT_LOOP ? "event loop unavailable" : "startup failed");
+            (void)snprintf(err, errcap, "engine: startup failed (errno %d)", errno);
         }
         goto fail;
     }
@@ -103,7 +132,8 @@ app_t *app_new(const config_t *cfg, char *err, size_t errcap)
         .cfg = &a->cfg,
         .lim = &a->limits,
         .router = a->router,
-        .engine = a->engine,
+        .engine = kind == ENGINE_EVENT_LOOP ? a->engine : NULL,
+        .nonblocking = kind == ENGINE_EVENT_LOOP,
     };
     return a;
 

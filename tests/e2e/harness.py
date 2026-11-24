@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(TESTS, "fakes"))
 import fake_backend  # noqa: E402  (big_chunks, CHUNKS, CLOSE_BODY를 테스트와 공유)
 
 BIN = None          # run_e2e.py가 --bin으로 채움
+ENGINE = None       # run_e2e.py가 --engine으로 선택할 수 있음
 REGISTRY = []       # (id, name, fn, optional)
 _LIVE = []          # 아직 살아 있을 수 있는 Popen (타임아웃 후 정리용)
 
@@ -209,6 +210,8 @@ class Server:
             cmd = [BIN, "-c", self.conf_path] + self.args
         else:
             cmd = [BIN, "-p", str(self.port), "-r", self.root] + self.args
+        if ENGINE is not None:
+            cmd += ["-e", ENGINE]
         self._out = open(os.path.join(self._tmp.name, "stdout"), "wb")
         self._err = open(os.path.join(self._tmp.name, "stderr"), "wb")
         self.proc = subprocess.Popen(cmd, cwd=REPO, stdout=self._out, stderr=self._err,
