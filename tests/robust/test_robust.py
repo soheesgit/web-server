@@ -455,6 +455,27 @@ def r23():
     expect(not errors, "; ".join(errors[:5]))
 
 
+@test("R-25", "large uploads never stall: 40 connections each POST 2 MiB and all get a response")
+def r25():
+    # v2는 한 번의 이벤트에서 읽기를 8번까지만 하고 돌려보낸다. 마지막 읽기에서 요청이 완성되면 파싱하지
+    # 않은 채 다음 이벤트를 기다려, 커널에 읽을 것이 없으니 30초 뒤 408이 났다 (확률적, 2 MiB에서 약 1/10).
+    body = bytes((i * 13) % 251 for i in range(2 << 20))
+    with site() as s:
+        conns = []
+        for i in range(40):
+            c = Conn(s.port, timeout=5)
+            conns.append(c)
+            c.send(harness.build_request("POST", "/cgi-bin/echo.py", body=body, port=s.port))
+            try:
+                r = c.read_response()
+            except (TimeoutError, EOFError) as e:
+                raise AssertionError(f"upload {i} of 40 got no response: {type(e).__name__}")
+            expect_eq(r.status, 200, f"upload {i} status")
+            expect(r.body.endswith(b"BODY=" + body + b"\n"), f"upload {i} echoed the whole body")
+        for c in conns:
+            c.close()
+
+
 @test("R-24", "abrupt client disconnects leak no fds or children")
 def r24():
     with site() as s:
