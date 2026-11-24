@@ -38,7 +38,7 @@
 
 ## 구현 단계
 5단계 `engine` v1: B `engine_pool`. 7단계(선택) v2: A `poller_*` · C `engine_loop`.
-- [ ] engine_pool (v1)
+- [x] engine_pool (v1)
 - [ ] poller_epoll
 - [ ] poller_kqueue
 - [ ] poller_poll

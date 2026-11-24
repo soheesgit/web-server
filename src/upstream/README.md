@@ -38,10 +38,10 @@
 
 ## 구현 단계
 4단계 (`upstream` + `handler` PROXY). 분담: A `request_writer`, `response_parser` · B `pool`, `lb` · C `backend`, `relay`. 7단계(선택) C `relay` 이벤트 경로.
-- [ ] request_writer
-- [ ] response_parser
-- [ ] backend
-- [ ] lb
-- [ ] pool
-- [ ] relay — blocking (v1)
+- [x] request_writer
+- [x] response_parser
+- [x] backend
+- [x] lb
+- [x] pool
+- [x] relay — blocking (v1)
 - [ ] relay — 상태 머신 (v2)
