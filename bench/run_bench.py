@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """벤치 실행기: 가짜 LLM 백엔드 N대 + httpd + loadgen을 띄우고 결과를 모은다.
 
-    run_bench.py e0                      # 프록시 지연, 끊김 전파 (직접 / loop / pool)
-    run_bench.py e1                      # 오래 열린 스트림 동시성 (loop / pool)
+    run_bench.py e0                      # 프록시 지연, 끊김 전파 (직접 / loop)
+    run_bench.py e1                      # 오래 열린 스트림 동시성 (loop)
+    (기준 엔진은 loop. v1 스레드 풀과 비교할 때만 --engines loop pool)
     run_bench.py scenario --name B --rate 3 --duration 60 --engine loop [--repeat 3]
 
 결과는 bench/results/<시각>-<실험>/ 에 loadgen JSONL, 백엔드 /__stats·/__events, 서버 로그,
@@ -140,7 +141,7 @@ def e0(a):
              "prefill = 첫 토큰 전",
              f"{'path':>8} {'n':>4} {'ttft_med':>9} {'overhead_med':>13} {'overhead_p99':>13}"
              f" {'itl_med':>8} {'itl_max_p99':>12} {'stream med/max':>27} {'prefill med/max':>27}"]
-    for mode in ("direct", "loop", "pool"):
+    for mode in ["direct"] + a.engines:
         st = Stack(out, 1, engine=None if mode == "direct" else mode)
         try:
             f = os.path.join(out, f"{mode}.jsonl")
@@ -181,7 +182,7 @@ def e1(a):
     lines = [f"E1: 백엔드 4대(병목 아님), 스트림 1500토큰(약 30초), pool workers={a.workers}",
              f"{'engine':>6} {'conc':>5} {'n':>4} {'ok':>4} {'ttft_med':>9} {'ttft_p99':>9}"
              f" {'total_med':>10} {'itl_max_p99':>12}"]
-    for engine in ("loop", "pool"):
+    for engine in a.engines:
         for conc in a.levels:
             st = Stack(out, 4, backend, engine=engine, workers=a.workers)
             try:
@@ -231,10 +232,12 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     s0 = sub.add_parser("e0")
     s0.add_argument("--duration", type=float, default=10)
+    s0.add_argument("--engines", nargs="+", default=["loop"], choices=["loop", "pool"])
     s1 = sub.add_parser("e1")
     s1.add_argument("--levels", type=int, nargs="+", default=[4, 8, 16, 32, 64])
     s1.add_argument("--workers", type=int, default=8)
     s1.add_argument("--duration", type=float, default=20)
+    s1.add_argument("--engines", nargs="+", default=["loop"], choices=["loop", "pool"])
     s2 = sub.add_parser("scenario")
     s2.add_argument("--name", default="A")
     s2.add_argument("--rate", type=float, required=True)

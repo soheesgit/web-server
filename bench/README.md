@@ -28,9 +28,12 @@ LLM 트래픽을 흉내 내 게이트웨이(httpd)를 재는 도구. `make test`
 
 | 이름 | 명령 | 보는 것 |
 | --- | --- | --- |
-| E0 | `python3 -I bench/run_bench.py e0` | 프록시가 더하는 TTFT·토큰 간격, 끊김 전파 (직접 / loop / pool) |
-| E1 | `python3 -I bench/run_bench.py e1` | 오래 열린 스트림 동시성 (loop / pool, 백엔드는 병목 아님) |
+| E0 | `python3 -I bench/run_bench.py e0` | 프록시가 더하는 TTFT·토큰 간격, 끊김 전파 (직접 / loop) |
+| E1 | `python3 -I bench/run_bench.py e1` | 오래 열린 스트림 동시성 (loop, 백엔드는 병목 아님) |
 | E2 | `python3 -I bench/run_bench.py scenario --name B --rate 3 --repeat 3` | 시나리오별 TTFT p50/p99, 백엔드별 분배 |
+
+게이트웨이는 기본 엔진인 이벤트 루프(loop)로 잰다. v1 스레드 풀은 비교할 때만
+`--engines loop pool`로 함께 돌린다.
 
 백엔드 1대(슬롯 4, 기본 계수)는 시나리오 A 요청을 초당 약 1개 처리한다. 4대면 약 4개.
 시나리오 B의 긴 요청(입력 5만)은 prefill만 약 45초라 실행기는 게이트웨이의
