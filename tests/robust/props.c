@@ -916,6 +916,66 @@ static void prop_chunked(void)
     }
 }
 
+/* ------------------------------------------------------------------ buf (append·consume·shrink) */
+
+/* 역할: 무작위 append·consume·shrink 열을 단순 모형(배열)과 견준다. 내용·len이 모형과 같고,
+ * shrink가 내용을 해치지 않으며 용량을 max(len, keep)까지만 줄이는지 본다 (D-043). */
+static void prop_buf(void)
+{
+    static char model[70000];
+    static char chunk[3000];
+    for (int it = 0; it < 300 * g_mult; it++) {
+        buf_t b;
+        size_t max = 1 + below(65536), mlen = 0;
+        EXPECT(buf_init(&b, below(64), max) == 0, "buf: init", "", 0);
+        for (int op = 0; op < 60; op++) {
+            size_t n, cap_before = b.cap;
+            switch (below(3)) {
+            case 0:
+                n = below(sizeof chunk);
+                for (size_t i = 0; i < n; i++) {
+                    chunk[i] = (char)below(256);
+                }
+                EXPECT((buf_append(&b, chunk, n) == 0) == (mlen + n <= max),
+                       "buf: append succeeds exactly when it fits max", "", 0);
+                if (mlen + n <= max) {
+                    memcpy(model + mlen, chunk, n);
+                    mlen += n;
+                }
+                break;
+            case 1:
+                n = below(mlen + 5);
+                buf_consume(&b, n);
+                if (n >= mlen) {
+                    mlen = 0;
+                } else {
+                    memmove(model, model + n, mlen - n);
+                    mlen -= n;
+                }
+                break;
+            default: {
+                size_t keep = below(5000), want = mlen > keep ? mlen : keep;
+                buf_shrink(&b, keep);
+                if (b.data == NULL) {
+                    break;
+                }
+                if (want == 0) {
+                    want = 1;
+                }
+                EXPECT(b.cap == (cap_before > want ? want : cap_before),
+                       "buf: shrink lowers cap to max(len, keep) and never raises it", "", 0);
+                break;
+            }
+            }
+            EXPECT(b.len == mlen && b.max == max && b.len <= b.cap && (b.cap <= max || b.cap == 0),
+                   "buf: len, max and cap stay consistent", "", 0);
+            EXPECT(mlen == 0 || memcmp(b.data, model, mlen) == 0,
+                   "buf: contents equal the model after every operation", "", 0);
+        }
+        buf_cleanup(&b);
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1) {
@@ -929,9 +989,13 @@ int main(int argc, char **argv)
         const char *name;
         void (*fn)(void);
     } props[] = {
-        {"request_parse_head", prop_request}, {"response_parse_head", prop_response},
-        {"cgi_parse_head", prop_cgi},         {"path_normalize", prop_normalize},
-        {"uri_decode_path", prop_decode},     {"http_body_track(chunked)", prop_chunked},
+        {"request_parse_head", prop_request},
+        {"response_parse_head", prop_response},
+        {"cgi_parse_head", prop_cgi},
+        {"path_normalize", prop_normalize},
+        {"uri_decode_path", prop_decode},
+        {"http_body_track(chunked)", prop_chunked},
+        {"buf (append·consume·shrink)", prop_buf},
     };
     for (size_t i = 0; i < sizeof props / sizeof props[0]; i++) {
         long before_c = g_checks, before_f = g_fails;
