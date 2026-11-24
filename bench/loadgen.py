@@ -11,8 +11,9 @@ bench/fake_llm.py 형식의 요청을 보내고, 요청마다 한 줄 JSON을 �
     loadgen.py --target ... --scenario A --rate 2 --duration 10 --abort-after-ms 500 ...
 
 요청 한 줄: id, cls, status, t_send, head_ms, ttft_ms, itl_med_ms, itl_max_ms, total_ms,
-out_tokens, backend, backend_timing(fake_llm 마지막 이벤트), aborted, error.
-끝나면 stderr에 요약표(클래스별 p50/p90/p99)를 쓴다.
+out_tokens, backend, backend_timing(fake_llm 마지막 이벤트), aborted, error, warmup.
+끝나면 stderr에 요약표(클래스별 p50/p90/p99)를 쓴다. 처음 --warmup초 동안 보낸 요청은
+기록하되 요약에서 뺀다 (warmup: true).
 """
 import argparse
 import asyncio
@@ -25,7 +26,8 @@ import time
 # 시나리오: (클래스 이름, 비중, 입력 토큰, 출력 토큰, 세션 방식)
 SCENARIOS = {
     "A": [("short", 1.0, 500, 100, None)],
-    "B": [("short", 0.9, 500, 100, None), ("long", 0.1, 50000, 2000, None)],
+    # B의 긴 요청은 기획서(5만/2000)의 1/10: 노트북 1B 보정 계수에 맞춘 크기 (bench/README.md)
+    "B": [("short", 0.9, 500, 100, None), ("long", 0.1, 5000, 500, None)],
     # C: 대화 32개가 번갈아 이어진다. 턴마다 앞부분이 그대로 반복된다
     "C": [("turn", 1.0, 2000, 200, "multiturn")],
     "long": [("stream", 1.0, 200, 1500, None)],  # E1: 오래 열린 스트림
@@ -56,6 +58,7 @@ class Gen:
         self.n = 0
         self.out = open(a.out, "w") if a.out else None
         self.rows = []
+        self.t_start = now_ms()
 
     def pick(self):
         r = self.rng.random() * sum(m[1] for m in self.mix)
@@ -77,6 +80,7 @@ class Gen:
         return self.n, name, req
 
     def record(self, row):
+        row["warmup"] = row.get("t_send", self.t_start) < self.t_start + self.a.warmup * 1000
         self.rows.append(row)
         if self.out:
             self.out.write(json.dumps(row) + "\n")
@@ -193,9 +197,10 @@ async def closed_loop(g):
 
 
 def summary(g):
-    rows = [r for r in g.rows if r.get("cls") != "dropped"]
-    dropped = len(g.rows) - len(rows)
-    print(f"requests {len(rows)}  dropped {dropped}", file=sys.stderr)
+    rows = [r for r in g.rows if r.get("cls") != "dropped" and not r["warmup"]]
+    dropped = sum(1 for r in g.rows if r.get("cls") == "dropped")
+    warm = sum(1 for r in g.rows if r["warmup"] and r.get("cls") != "dropped")
+    print(f"requests {len(rows)} (warmup excluded {warm})  dropped {dropped}", file=sys.stderr)
     print(f"{'class':>8} {'n':>5} {'ok':>5} {'err':>4} {'5xx':>4}  "
           f"{'ttft p50':>9} {'p90':>8} {'p99':>8}  {'total p50':>9} {'p99':>8}  {'itl_max p99':>11}",
           file=sys.stderr)
@@ -228,6 +233,7 @@ def main():
     p.add_argument("--rate", type=float, help="초당 요청 (열린 루프)")
     p.add_argument("--concurrency", type=int, help="동시 요청 수 (닫힌 루프)")
     p.add_argument("--duration", type=float, default=30, help="초 (도착을 만드는 시간)")
+    p.add_argument("--warmup", type=float, default=10, help="초. 이 동안 보낸 요청은 요약에서 뺌")
     p.add_argument("--conversations", type=int, default=32, help="시나리오 C의 대화 수")
     p.add_argument("--abort-after-ms", type=float, default=0, help="요청 뒤 이만큼 지나면 끊음")
     p.add_argument("--max-inflight", type=int, default=2000)
