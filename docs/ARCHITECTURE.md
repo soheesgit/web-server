@@ -77,6 +77,8 @@ conn이 이 셋을 엮는 정확한 순서는 `downstream/conn.h`의 `conn_serve
 
 엔진은 연결 객체를 `void *`로만 다루며 HTTP를 모른다. conn은 두 엔진에 같은 객체를 쓴다(`conn_env_t.nonblocking`으로 경로 선택).
 
+v2는 연결별로 클라이언트 소켓·relay·CGI pipe 등록을 소유한다. 등록이 해제되면 이벤트 배치 끝까지 포인터를 남겨, 같은 배치에 있는 이전 이벤트와 FD 번호 재사용을 구분한다. 다음 마감은 최소 힙으로 관리한다. 콜백당 작업량을 제한하고, 느린 클라이언트의 출력이 밀리면 응답 소스 읽기를 잠시 멈춘다. 정적 파일의 로컬 파일 I/O와 CGI의 생성·회수는 기존 시스템 호출을 사용한다. [동시성 엔진 비교](benchmarks/stage7-engines.md)
+
 ## 6. 시작과 종료
 
 `main` → `config_load` → `log_open` → SIGPIPE 무시 → SIGINT·SIGTERM 핸들러(플래그만 설정) → `app_new`(limits 변환 → upstream 레지스트리 → router → listener → engine) → `app_run` → `app_free` → `log_close`. 종료 플래그가 서면 engine은 새 연결을 받지 않고 진행 중 연결을 유예 시간만큼 기다린다. 종료 코드는 `src/app/main.c` 머리 주석에 있다.

@@ -14,6 +14,8 @@ from types import SimpleNamespace
 
 from proxy_bench import Backend, Handler, Proxy, ROOT
 
+ENGINE = "pool"
+
 
 class Controlled(Handler):
     def respond(self, data, content_type="text/plain"):
@@ -76,7 +78,7 @@ def backend(port=0, number=0):
 
 @contextmanager
 def proxy(binary, backends, policy="rr", extra=(), env=None):
-    p = Proxy(binary, backends, policy, 8, extra, env)
+    p = Proxy(binary, backends, policy, 8, [*extra, f"engine {ENGINE}"], env)
     try:
         yield p
     finally:
@@ -245,10 +247,13 @@ def idle_expiry(binary):
 
 
 def main():
+    global ENGINE
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--binary", type=Path, default=ROOT / "build/httpd")
+    ap.add_argument("--engine", choices=("pool", "loop"), default="pool")
     ap.add_argument("--idle-expiry", action="store_true")
     args = ap.parse_args()
+    ENGINE = args.engine
     binary = args.binary.resolve(strict=True)
     for test in (forward_proxy, retry_and_framing, load_balancing, half_open):
         test(binary)

@@ -40,6 +40,8 @@ make reverse-proxy
 
 `conf/reverse-proxy.conf`는 127.0.0.1:8080에서 요청을 받고 8081~8083으로 중계한다. 배포 환경에서는 대상 리스너와 백엔드 주소를 설정하고 `pool_max_idle 8`을 명시한다. 별도 파일은 `make reverse-proxy REVERSE_PROXY_CONF=/path/to/reverse-proxy.conf`로 지정한다. `./build/httpd`를 직접 실행할 때 `HTTPD_PROXY_LB`를 생략하면 기존의 RR 기본값을 사용한다.
 
+Stage 7 이후에는 `make reverse-proxy ENGINE=loop`로 같은 Reverse Proxy의 이벤트 루프를 실행할 수 있다. `ENGINE=pool`은 스레드 풀을 선택한다.
+
 `HTTPD_PROXY_LB`는 `rr`(기본), `least_requests`, `p2c`를 받는다. `HTTPD_PROXY_RECOVERY`는 `ramp`(기본), `single`을 받는다. `single`은 시험 요청 한 개가 성공하면 바로 정상으로 복귀한다. `pool_max_idle`은 기존 설정 파일의 유휴 상한이며 기본값은 8이다. `HTTPD_PROXY_METRICS=1`은 프로세스 종료 로그에 백엔드별 집계를 기록한다.
 
 Forward Proxy는 프로세스 시작 시 `HTTPD_FORWARD_PROXY=18081`로 허용 포트 하나를 지정한다. 리스너와 클라이언트는 `127.0.0.1`이어야 한다. 같은 포트의 숫자 루프백 주소만 기존 Host route와 연결할 수 있다.
@@ -70,8 +72,10 @@ make asan
 python3 tests/bench/proxy_verify.py --idle-expiry
 ```
 
-macOS 기본 빌드에서 계약·기능 테스트 135개가 통과했다. E-PX 17개는 별도 실행에서도 모두 통과했다. Linux arm64 컨테이너에서 ASan·UBSan 테스트 135개와 추가 로컬 프록시 검증을 통과했다. `U-DS-40`, `U-DS-44`, `U-EN-05`는 v2 미구현으로 pending이다. 팀 계약 검토 항목은 D-041~044에 기록했다.
+Stage 4 당시 macOS 기본 빌드와 Linux ASan·UBSan에서 계약·기능 테스트 135개가 통과했고, E-PX 17개는 별도 실행에서도 통과했다. 당시 pending이었던 `U-DS-40`, `U-DS-44`, `U-EN-05`는 Stage 7에서 검증한다. 팀 계약 검토 항목은 D-041~044에 기록했다.
 
 성능 비교 방법과 결과는 [벤치마크 보고서](benchmarks/README.md)에 있다.
 
 Stage 5의 후속 계약 검증과 워커 수·대기 큐 측정은 [스레드 풀 검증 및 측정](benchmarks/stage5-workers.md)에 있다.
+
+Stage 7의 엔진별 검증과 측정은 [동시성 엔진 비교](benchmarks/stage7-engines.md)에 있다.

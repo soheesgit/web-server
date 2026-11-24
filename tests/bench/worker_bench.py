@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v1 워커 수와 접속 대기 큐 크기를 비교한다."""
+"""v1 워커 설정 또는 동일 조건에서 v1·v2 동시성 엔진을 비교한다."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -38,8 +38,8 @@ class WorkerBackend(Handler):
         self.wfile.write(SLOW_BODY)
 
 
-def hold_idle(port, stack):
-    for _ in range(IDLE_CONNECTIONS):
+def hold_idle(port, stack, count):
+    for _ in range(count):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         stack.callback(conn.close)
         conn.request("GET", "/api/blob")
@@ -104,7 +104,7 @@ def measure(proxy, clients):
     }
 
 
-def trial(binary, scenario, workers, queue):
+def trial(binary, scenario, workers, queue, engine="pool", idle_connections=IDLE_CONNECTIONS):
     with ExitStack() as stack:
         backends = []
         for i, delay in enumerate(DELAYS):
@@ -112,7 +112,7 @@ def trial(binary, scenario, workers, queue):
             stack.callback(backend.stop)
             backends.append(backend)
         proxy = Proxy(binary, backends, "least_requests", 8, extra=[
-            "engine pool", f"workers {workers}", f"queue_len {queue}",
+            f"engine {engine}", f"workers {workers}", f"queue_len {queue}",
             "keepalive_timeout_ms 15000", "upstream_response_timeout_ms 2000",
         ])
         stack.callback(proxy.stop)
@@ -122,8 +122,8 @@ def trial(binary, scenario, workers, queue):
             raise RuntimeError(f"warmup failed ({workers} workers, queue {queue})")
 
         slow = []
-        if scenario == "idle_keepalive":
-            hold_idle(proxy.port, stack)
+        if scenario in ("idle_keepalive", "dense_keepalive"):
+            hold_idle(proxy.port, stack, idle_connections)
         elif scenario == "slow_download":
             readers = stack.enter_context(ThreadPoolExecutor(SLOW_READERS))
             begin = threading.Event()
@@ -147,33 +147,46 @@ def trial(binary, scenario, workers, queue):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=ROOT / "build/httpd")
-    parser.add_argument("--workers", type=int, default=20, help="baseline worker count")
+    parser.add_argument("--workers", type=int, help="v1 worker count for the comparison")
+    parser.add_argument("--compare-engines", action="store_true")
     parser.add_argument("--repeat", type=int, default=5)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    if not IDLE_CONNECTIONS < args.workers <= 512 or args.repeat < 1:
+    workers = args.workers if args.workers is not None else (40 if args.compare_engines else 20)
+    if not IDLE_CONNECTIONS < workers <= 512 or args.repeat < 1:
         parser.error("--workers must be between 17 and 512 and --repeat must be positive")
     binary = args.binary.resolve(strict=True)
-    cases = [(s, w, q) for s in SCENARIOS for w in (args.workers, args.workers * 2)
-             for q in (32, 1024)]
+    dense_idle = workers - 4
+    if args.compare_engines:
+        if dense_idle <= IDLE_CONNECTIONS:
+            parser.error("--compare-engines requires at least 21 workers")
+        cases = [(s, workers, 1024, e, dense_idle if s == "dense_keepalive" else IDLE_CONNECTIONS)
+                 for s in (*SCENARIOS, "dense_keepalive") for e in ("pool", "loop")]
+    else:
+        cases = [(s, w, q, "pool", IDLE_CONNECTIONS)
+                 for s in SCENARIOS for w in (workers, workers * 2) for q in (32, 1024)]
     rng = random.Random(ORDER_SEED)
     setup = environment(binary)
     for key in ("workers", "fault_cooldown_ms"):
         setup.pop(key)
-    setup.update(engine="pool", policy="least_requests", pool_max_idle=8,
+    setup.update(engine="pool_vs_loop" if args.compare_engines else "pool",
+                 policy="least_requests", pool_max_idle=8,
                  small_requests=SMALL_REQUESTS, clients=CLIENTS, warmup_requests=WARMUP,
                  backend_delays_ms=[d * 1000 for d in DELAYS], idle_connections=IDLE_CONNECTIONS,
                  slow_readers=SLOW_READERS, slow_body_bytes=len(SLOW_BODY),
                  slow_reader_bytes_per_sec=READ_RATE, shuffle_seed=ORDER_SEED)
+    if args.compare_engines:
+        setup.update(pool_workers=workers, pool_queue_len=1024, dense_idle_connections=dense_idle)
     with args.out.open("w", encoding="utf-8") as f:
         f.write(json.dumps({"environment": setup}) + "\n")
         for repeat in range(1, args.repeat + 1):
-            for scenario, workers, queue in rng.sample(cases, len(cases)):
-                row = trial(binary, scenario, workers, queue)
-                row.update(repeat=repeat, scenario=scenario, workers=workers, queue_len=queue)
+            for scenario, worker_count, queue, engine, idle in rng.sample(cases, len(cases)):
+                row = trial(binary, scenario, worker_count, queue, engine, idle)
+                row.update(repeat=repeat, scenario=scenario, workers=worker_count, queue_len=queue,
+                           engine=engine, idle_connections=idle if "keepalive" in scenario else 0)
                 f.write(json.dumps(row, separators=(",", ":")) + "\n")
                 f.flush()
-                print(repeat, scenario, workers, queue, flush=True)
+                print(repeat, scenario, engine, worker_count, queue, flush=True)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ FAIL             E-PX-03  hop-by-hop removed  (expected 200, got 502)
 | `make e2e` | `python3 tests/e2e/run_e2e.py --bin build/httpd --pending tests/pending.txt` |
 | `make test` | 위 둘 + 합계 줄 |
 | `make test ONLY=E-PX` | ID 접두사로 거르기 (unit·e2e 공통) |
+| `make test ENGINE=loop` | 계약 테스트와 v2 엔진의 E2E 테스트 |
 | `build/run_unit --list`, `run_e2e.py --list` | 등록된 ID 목록 |
 | `run_e2e.py -v`, `run_unit -v` | 실패·pending 사유 출력 |
 | `make asan` | ASan + UBSan 빌드(`build-asan/`)로 `make test` |
@@ -60,6 +61,8 @@ FAIL             E-PX-03  hop-by-hop removed  (expected 200, got 502)
 E2E 공통 판정: `harness.Server`가 끝날 때 서버가 살아 있는지, 좀비 자식이 없는지, (Linux에서) 열린 fd 수가 시작 때로 돌아왔는지 확인하고 어기면 그 테스트는 실패다. 프록시 테스트는 백엔드당 유휴 연결 상한만큼 fd 여유를 둔다.
 
 Stage 5 프로세스 검증은 `python3 tests/bench/worker_verify.py`로 실행한다. 스레드 풀 과부하, 시그널 종료, FD 한도 복구를 루프백에서 재현한다.
+
+Stage 7에서는 Linux ASan·UBSan을 `make asan`과 `make asan ENGINE=loop`로 실행한다. `make BUILD="$(mktemp -d)" EXTRA_CFLAGS=-DHTTPD_FORCE_POLL test ENGINE=loop`는 POSIX poll 경로를 명시적으로 검증한다.
 
 ## 4. fake와 fixture
 
