@@ -73,3 +73,5 @@ python3 tests/bench/proxy_verify.py --idle-expiry
 macOS 기본 빌드에서 계약·기능 테스트 135개가 통과했다. E-PX 17개는 별도 실행에서도 모두 통과했다. Linux arm64 컨테이너에서 ASan·UBSan 테스트 135개와 추가 로컬 프록시 검증을 통과했다. `U-DS-40`, `U-DS-44`, `U-EN-05`는 v2 미구현으로 pending이다. 팀 계약 검토 항목은 D-041~044에 기록했다.
 
 성능 비교 방법과 결과는 [벤치마크 보고서](benchmarks/README.md)에 있다.
+
+Stage 5의 후속 계약 검증과 워커 수·대기 큐 측정은 [스레드 풀 검증 및 측정](benchmarks/stage5-workers.md)에 있다.
