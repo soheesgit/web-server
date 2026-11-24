@@ -40,4 +40,4 @@
 - [x] cgi
 - [x] proxy
 
-소스 구현은 반영했다. 선택 기능인 E-ST-12(If-Modified-Since 304)도 구현했다 (`static.c` `is_not_modified_since`). WSL Ubuntu에서 `make`, `make lint`, `make test`를 실행해 통과했다 (2026-11-23). `make asan`은 아직 실행하지 않았다.
+소스 구현은 반영했다. 선택 기능인 E-ST-12(If-Modified-Since 304)도 구현했다 (`static.c` `is_not_modified_since`). WSL Ubuntu에서 `make`, `make lint`, `make test`를 실행해 통과했다 (2026-11-23). `make asan`도 통과했다 (131/131, 2026-11-24).
