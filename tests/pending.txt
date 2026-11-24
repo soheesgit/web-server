@@ -14,100 +14,22 @@ U-DS-44
 # --- U-HD --- 계약 최소셋: handler (plan·static·cgi)
 
 # --- U-PX --- 계약 최소셋: handler (proxy)
-U-PX-01
-U-PX-05
-U-PX-07
-U-PX-10
 
 # --- U-US --- 계약 최소셋: upstream
-U-US-01
-U-US-09
-U-US-12
-U-US-17
-U-US-24
 
 # --- U-EN --- 계약 최소셋: engine
-U-EN-01
-U-EN-02
 U-EN-05
 
 # --- E-ST --- 기능: 정적 파일 (E-ST-12는 선택, D-006)
-E-ST-01
-E-ST-02
-E-ST-03
-E-ST-04
-E-ST-05
-E-ST-06
-E-ST-07
-E-ST-08
-E-ST-09
-E-ST-10
-E-ST-11
-E-ST-12
 
 # --- E-CG --- 기능: CGI
-E-CG-01
-E-CG-02
-E-CG-03
-E-CG-04
-E-CG-05
-E-CG-06
-E-CG-07
-E-CG-08
-E-CG-09
-E-CG-10
 
 # --- E-PX --- 기능: 리버스 프록시
-E-PX-01
-E-PX-02
-E-PX-03
-E-PX-04
-E-PX-05
-E-PX-06
-E-PX-07
-E-PX-08
-E-PX-09
-E-PX-10
-E-PX-11
-E-PX-12
-E-PX-13
-E-PX-14
-E-PX-15
-E-PX-16
-E-PX-17
 
 # --- E-KA --- 기능: 연결 유지
-E-KA-01
-E-KA-02
-E-KA-03
-E-KA-04
-E-KA-05
-E-KA-06
-E-KA-07
 
 # --- E-ER --- 기능: 잘못된 요청
-E-ER-01
-E-ER-02
-E-ER-03
-E-ER-04
-E-ER-05
-E-ER-06
-E-ER-07
-E-ER-08
-E-ER-09
-E-ER-10
-E-ER-11
-E-ER-12
-E-ER-13
-E-ER-14
 
 # --- E-SL --- 기능: 느린·끊기는 클라이언트
-E-SL-01
-E-SL-02
-E-SL-03
-E-SL-04
 
 # --- E-CF --- 기능: 설정·실행 (E-CF-01은 initial commit에서 이미 통과해 넣지 않음, D-007)
-E-CF-02
-E-CF-03
-E-CF-04
