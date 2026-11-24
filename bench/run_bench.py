@@ -4,6 +4,7 @@
     run_bench.py e0                      # 프록시 지연, 끊김 전파 (직접 / loop)
     run_bench.py e1                      # 오래 열린 스트림 동시성 (loop)
     (기준 엔진은 loop. v1 스레드 풀과 비교할 때만 --engines loop pool)
+    run_bench.py capacity --name A --rates 1 2 3 4   # 속도별 짧은 실행으로 처리 능력 찾기
     run_bench.py scenario --name B --rate 3 --duration 60 --engine loop [--repeat 3]
 
 결과는 bench/results/<시각>-<실험>/ 에 loadgen JSONL, 백엔드 /__stats·/__events, 서버 로그,
@@ -211,12 +212,41 @@ def scenario(a):
         try:
             f = os.path.join(out, f"run{i + 1}.jsonl")
             summ = loadgen(st.target, f, "--scenario", a.name, "--rate", a.rate,
-                           "--duration", a.duration, "--seed", i + 1)
+                           "--duration", a.duration, "--warmup", a.warmup, "--seed", i + 1)
             json.dump(st.backend_json("/__stats"), open(os.path.join(out, f"run{i + 1}-stats.json"), "w"))
         finally:
             st.close()
         lines.append(f"--- run {i + 1}")
         lines.append(summ.rstrip())
+    report(out, lines)
+
+
+# ── 처리 능력 찾기 ────────────────────────────────────────────────────────
+
+def capacity(a):
+    out = new_outdir(f"capacity-{a.name}")
+    lines = [f"capacity: scenario {a.name}, loop, backends 4, 속도마다 {a.duration}s (워밍업 "
+             f"{a.warmup}s 제외), 도착 끝난 뒤 진행 중 요청까지 기다림",
+             f"{'rate':>5} {'sent':>5} {'done/s':>7} {'short ttft p50':>15} {'p99':>8}"
+             f" {'all ttft p99':>13} {'total p99':>10} {'5xx/err':>8}"]
+    for rate in a.rates:
+        st = Stack(out, 4, engine="loop")
+        try:
+            f = os.path.join(out, f"r{rate}.jsonl")
+            t0 = time.time()
+            loadgen(st.target, f, "--scenario", a.name, "--rate", rate, "--duration",
+                    a.duration, "--warmup", a.warmup)
+            wall = time.time() - t0
+        finally:
+            st.close()
+        rs = [r for r in rows(f) if not r["warmup"] and r.get("cls") != "dropped"]
+        ok = [r for r in rs if r["status"] == 200 and not r["error"]]
+        short = [r for r in ok if r["cls"] in ("short", "turn")]
+        bad = sum(1 for r in rs if r["error"] or (r["status"] or 0) >= 500)
+        lines.append(f"{rate:>5} {len(rs):>5} {len(ok) / (wall - a.warmup):>7.2f}"
+                     f" {med([r['ttft_ms'] for r in short]):>15.0f} {p99([r['ttft_ms'] for r in short]):>8.0f}"
+                     f" {p99([r['ttft_ms'] for r in ok]):>13.0f} {p99([r['total_ms'] for r in ok]):>10.0f}"
+                     f" {bad:>8}")
     report(out, lines)
 
 
@@ -244,10 +274,16 @@ def main():
     s2.add_argument("--duration", type=float, default=60)
     s2.add_argument("--engine", default="loop", choices=["loop", "pool"])
     s2.add_argument("--repeat", type=int, default=1)
+    s2.add_argument("--warmup", type=float, default=10)
+    s3 = sub.add_parser("capacity")
+    s3.add_argument("--name", default="A")
+    s3.add_argument("--rates", type=float, nargs="+", required=True)
+    s3.add_argument("--duration", type=float, default=40)
+    s3.add_argument("--warmup", type=float, default=10)
     a = p.parse_args()
     if not os.path.exists(HTTPD):
         sys.exit("build/httpd가 없다: make 먼저")
-    {"e0": e0, "e1": e1, "scenario": scenario}[a.cmd](a)
+    {"e0": e0, "e1": e1, "scenario": scenario, "capacity": capacity}[a.cmd](a)
 
 
 if __name__ == "__main__":
