@@ -590,6 +590,10 @@ static int setup_proxy_job(conn_t *c, const http_request_t *req, const route_t *
         c->job.affinity_key = sid->value;
     }
     if (rt->kind == ROUTE_FORWARD) {
+        /* 캐시 적중이면 계획이 완성됐다: 이름 해석과 연결을 건너뛴다 (D-047) */
+        if (proxy_cache_begin(req, c->env->cfg, &c->job, &c->plan)) {
+            return -1;
+        }
         /* 포워드(D-046): 목적지는 URI의 authority 하나라 다른 백엔드로 재시도하지 않는다 */
         c->job.backend = upstream_forward_backend(rt->upstream, req->host);
         c->job.max_attempts = 1;
@@ -773,6 +777,9 @@ static int upstream_send_body(conn_t *c, uint64_t *sent)
                 canceled = true;
                 result = BODY_ERROR;
             }
+            if (result != BODY_ERROR) {
+                proxy_body_tee(&c->job, data, used); /* 포워드 캐시용 복사 (D-047) */
+            }
             *sent += used;
         }
         if (result == BODY_ERROR) {
@@ -780,6 +787,7 @@ static int upstream_send_body(conn_t *c, uint64_t *sent)
             break;
         }
         if (result == BODY_DONE) {
+            proxy_body_done(&c->job);
             break;
         }
         if (buffered > 0) {
@@ -1482,6 +1490,9 @@ static nb_step_t nb_upstream_body(conn_t *c, int64_t now)
             local_error = true;
             result = BODY_ERROR;
         }
+        if (result != BODY_ERROR) {
+            proxy_body_tee(&c->job, bytes, used); /* 포워드 캐시용 복사 (D-047) */
+        }
         s->sent += used;
     }
     if (result == BODY_ERROR) {
@@ -1497,6 +1508,9 @@ static nb_step_t nb_upstream_body(conn_t *c, int64_t now)
         return NB_PROGRESS;
     }
     s->body_done = result == BODY_DONE;
+    if (s->body_done) {
+        proxy_body_done(&c->job);
+    }
     return NB_PROGRESS;
 }
 

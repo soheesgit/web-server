@@ -52,6 +52,8 @@ void config_defaults(config_t *out_cfg)
     out_cfg->backend_cooldown_ms = 10000;
     out_cfg->pool_max_idle = 8;
     out_cfg->shutdown_grace_ms = 5000;
+    out_cfg->cache_max_bytes = 8388608;
+    out_cfg->cache_entry_max = 1048576;
     out_cfg->access_log[0] = '\0';
     out_cfg->error_log[0] = '\0';
     out_cfg->n_upstreams = 0;
@@ -190,6 +192,8 @@ static const knob_t knobs[] = {
     KNOB(backend_cooldown_ms, KNOB_INT),
     KNOB(pool_max_idle, KNOB_INT),
     KNOB(shutdown_grace_ms, KNOB_INT),
+    KNOB(cache_max_bytes, KNOB_INT),
+    KNOB(cache_entry_max, KNOB_INT),
 };
 #undef KNOB
 
@@ -201,7 +205,10 @@ static int apply_knob(cfg_ctx_t *c, const knob_t *k, str_t val)
                                           : UINT64_MAX;
     uint64_t v;
 
-    if (parse_uint(val, max, &v) != 0) {
+    /* cache_max_bytes만 0(캐시 끔)을 받는다 (D-047) */
+    if (str_eq(val, "0") && strcmp(k->name, "cache_max_bytes") == 0) {
+        v = 0;
+    } else if (parse_uint(val, max, &v) != 0) {
         return cfg_fail_at(c, c->line, EINVAL, "%s: invalid value '%.*s'", k->name, pf_len(val),
                            val.ptr);
     }

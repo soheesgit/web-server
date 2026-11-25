@@ -1,6 +1,6 @@
 /* src/handler/cache.c
  *
- * 포워드 프록시 응답 캐시. 정책과 API: internal_cache.h, 결정: D-042
+ * 포워드 프록시 응답 캐시. 정책과 API: internal_cache.h, 결정: D-047
  */
 #include "handler/internal_cache.h"
 

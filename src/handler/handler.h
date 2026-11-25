@@ -284,4 +284,58 @@ int proxy_on_head(proxy_job_t *job, struct upstream_conn *c, const http_response
  */
 void proxy_job_cleanup(proxy_job_t *job);
 
+/**
+ * 포워드 요청의 응답 캐시를 본다 (D-047). conn이 포워드 route의 첫 시도 전에 부른다.
+ *
+ * GET이 신선한 항목에 적중하면 plan에 그 응답(BODY_MEM, Age·X-Cache: HIT)을 만들고 1.
+ * 적중이 아니면 0이고, 저장할 만한 요청이면 job->fill을 준비한다. POST는 같은 URL 항목을 지운다.
+ * cfg->cache_max_bytes가 0이면 아무 일 없이 0.
+ *
+ * @param req   요청 (absolute-form). NULL 불가
+ * @param cfg   설정. NULL 불가
+ * @param job   작업. fill을 채울 수 있음. NULL 불가
+ * @param plan  적중 때 채울 계획. NULL 불가
+ * @return      1 적중(plan 완성), 0 원본으로 간다
+ *
+ * 에러:    없음 (캐시 실패는 원본으로 간다)
+ * 소유권:  job->fill은 job이 소유 (proxy_job_cleanup이 해제)
+ * 스레드:  [thread-safe] (저장소는 내부 뮤텍스로 보호)
+ * I/O:     없음
+ * 블로킹:  짧은 mutex
+ * 테스트:  E-FW-02~E-FW-07
+ */
+int proxy_cache_begin(const http_request_t *req, const config_t *cfg, proxy_job_t *job,
+                      response_plan_t *plan);
+
+/**
+ * 업스트림 본문 바이트를 포워드 응답 캐시에 복사해 둔다 (D-047). job->fill이 없으면 아무 일도 없다.
+ * conn이 클라이언트로 보내는 본문 조각마다 부른다 (같은 바이트를 한 번만).
+ *
+ * @param job  작업. NULL 허용
+ * @param p    본문 바이트 (이번 응답에 속한 것만)
+ * @param n    바이트 수
+ *
+ * 에러:    없음 (복사에 실패하거나 선언 길이를 넘으면 저장을 포기)
+ * 소유권:  p를 빌림
+ * 스레드:  [per-object]
+ * I/O:     없음
+ * 블로킹:  없음
+ * 테스트:  E-FW-02~E-FW-07
+ */
+void proxy_body_tee(proxy_job_t *job, const char *p, size_t n);
+
+/**
+ * 업스트림 본문이 끝까지 왔다고 알린다. 모은 바이트가 선언한 길이와 같으면 캐시에 저장한다.
+ *
+ * @param job  작업. NULL 허용
+ *
+ * 에러:    없음
+ * 소유권:  없음
+ * 스레드:  [per-object] (저장소는 내부 뮤텍스로 보호)
+ * I/O:     없음
+ * 블로킹:  없음
+ * 테스트:  E-FW-02~E-FW-07
+ */
+void proxy_body_done(proxy_job_t *job);
+
 #endif
