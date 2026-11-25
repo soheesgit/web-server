@@ -7,9 +7,38 @@
 #include "common/http_framing.h"
 #include "common/http_headers.h"
 #include "core/platform.h"
+#include "handler/internal_cache.h"
 #include "handler/plan.h"
 #include "upstream/request_writer.h"
 #include "upstream/upstream.h"
+
+int proxy_cache_begin(const http_request_t *req, const config_t *cfg, proxy_job_t *job,
+                      response_plan_t *plan)
+{
+    char key[2200];
+    size_t key_len;
+    bool bypass, store;
+    if (cfg->cache_max_bytes <= 0 || (req->method != HTTP_GET && req->method != HTTP_POST)) {
+        return 0;
+    }
+    key_len = cache_make_key(req->target, key, sizeof(key));
+    if (key_len == 0) {
+        return 0;
+    }
+    if (req->method == HTTP_POST) {
+        cache_invalidate(key, key_len);
+        return 0;
+    }
+    cache_request_policy(req, &bypass, &store);
+    if (!bypass && cache_serve(key, key_len, req->keep_alive, plan) == 0) {
+        return 1;
+    }
+    if (store) {
+        job->fill = cache_fill_new(key, key_len, (size_t)cfg->cache_entry_max,
+                                   (size_t)cfg->cache_max_bytes);
+    }
+    return 0;
+}
 
 handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const handler_ctx_t *ctx,
                              proxy_job_t *out_job, response_plan_t *out_plan)
@@ -23,6 +52,10 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
         /* 포워드(D-046)는 목적지가 URI에 적힌 absolute-form 요청만 받는다 */
         if (req->target.len == 0 || req->target.ptr[0] == '/') {
             (void)plan_error(out_plan, 400);
+            return HANDLER_DONE;
+        }
+        /* 캐시 적중이면 이름 해석(블로킹)과 연결을 건너뛴다 (D-047) */
+        if (proxy_cache_begin(req, ctx->cfg, out_job, out_plan)) {
             return HANDLER_DONE;
         }
         b = upstream_forward_backend(rt->upstream, req->host);
@@ -121,6 +154,15 @@ int proxy_on_head(proxy_job_t *job, upstream_conn_t *c, const http_response_t *r
         }
     }
     out_plan->head.close = !job->client_keep_alive || out_plan->head.framing.kind == FRAMING_CLOSE;
+    if (job->fill != NULL) {
+        (void)cache_fill_arm(job->fill, resp, &out_plan->head.fields);
+        if (buf_appendf(&out_plan->head.fields, "X-Cache: MISS\r\n") != 0) {
+            goto fail;
+        }
+        if (resp->framing.kind == FRAMING_LENGTH && resp->framing.length == 0) {
+            cache_fill_commit(job->fill); /* 본문이 없어 전달 경로가 done을 부르지 않는다 */
+        }
+    }
     out_plan->kind = BODY_UPSTREAM;
     out_plan->body.upstream.conn = c;
     http_body_tracker_init(&out_plan->body.upstream.tracker, resp->framing);
@@ -132,9 +174,24 @@ fail:
     return -1;
 }
 
+void proxy_body_tee(proxy_job_t *job, const char *p, size_t n)
+{
+    if (job != NULL && job->fill != NULL) {
+        cache_fill_data(job->fill, p, n);
+    }
+}
+
+void proxy_body_done(proxy_job_t *job)
+{
+    if (job != NULL && job->fill != NULL) {
+        cache_fill_commit(job->fill);
+    }
+}
+
 void proxy_job_cleanup(proxy_job_t *job)
 {
     if (job != NULL) {
+        cache_fill_free(job->fill);
         buf_cleanup(&job->request);
         *job = (proxy_job_t){0};
     }

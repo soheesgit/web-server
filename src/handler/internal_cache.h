@@ -1,6 +1,6 @@
 /* src/handler/internal_cache.h
  *
- * 포워드 프록시 응답 캐시 (D-042). handler/ 안에서만 쓴다 (proxy.c ↔ cache.c).
+ * 포워드 프록시 응답 캐시 (D-047). handler/ 안에서만 쓴다 (proxy.c ↔ cache.c).
  * 정책: GET만, 상태 200, Content-Length로 끝이 정해진 응답만 저장한다. 신선도는 s-maxage → max-age
  * (Age만큼 뺌). no-store·private·no-cache·Vary·Set-Cookie가 있거나 신선도가 없으면 저장하지 않는다.
  * 요청에 Authorization·Range·no-cache·no-store가 있으면 캐시를 쓰지 않는다. POST는 같은 URL의
