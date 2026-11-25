@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -133,6 +134,7 @@ static void t_u_us_17(void)
 
     CHECK(cfg != NULL);
     reg = upstream_registry_new(cfg, err, sizeof(err));
+    free(cfg);
     CHECK(reg != NULL);
     g = upstream_registry_get(reg, "g");
     CHECK(g != NULL);
@@ -170,6 +172,7 @@ static void t_u_us_24(void)
     cfg = cfg_with_group(1, ntohs(sa.sin_port));
     CHECK(cfg != NULL);
     reg = upstream_registry_new(cfg, err, sizeof(err));
+    free(cfg);
     CHECK(reg != NULL);
     g = upstream_registry_get(reg, "g");
     CHECK(g != NULL);

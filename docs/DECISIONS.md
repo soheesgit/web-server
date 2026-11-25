@@ -317,3 +317,78 @@
 - 결정: 잘못된 길이, 충돌하는 길이, 중복 `Status`는 CGI 응답 오류(502)로 처리한다.
 - 대안: 오류가 있는 항목을 버리고 나머지 헤더만 사용.
 - 영향: `handler/cgi.c`. U-HD-26~30, E-CG-05.
+
+## D-041 프록시 시도 예약과 재시도 명세 정합성
+
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: D-010처럼 직렬화한 요청을 그대로 재사용하면 다음 백엔드가 첫 시도의 Host를 받는다. 또한 응답 머리에서 성공을 보고하면 이후 본문 미달과 잘못된 청크로 끝난 시도를 구분할 수 없다. 기준 develop에는 D-036이 없고, D-004의 재시도 범위 문구와 U-PX-07의 GET 부분 송신 기대값이 다르다.
+- 결정: 현재 v1은 기존 relay 호출에 빈 요청 버퍼를 넘겨 먼저 대상을 예약하고, 선택 대상이 확정된 뒤 conn에서 원래 요청을 직렬화한다. 재시도 시 이 순서를 반복한다. 풀 연결의 같은 대상 재연결은 첫 송신 0바이트 실패에 한정한다. 응답을 기다리기 시작한 시도는 재시도하지 않는다. GET·HEAD 부분 송신은 현재 U-PX-07과 처리기 계약을 따른다. 본문 완료 후 성공을 보고하고, 클라이언트 취소는 상태에 반영하지 않는다. 팀 검토 후 예약 및 결과 보고의 계약을 공개 API로 명시하고 D-004의 범위를 정리한다.
+- 대안: 첫 백엔드의 Host를 재사용하거나 응답 머리 수신만으로 회복 판단.
+- 영향: `downstream/conn.c`, `handler/proxy.c`, `upstream/relay.c`, `upstream/pool.c`, U-PX-05, U-PX-07, E-PX-08~14. 공개 서명·타입 변경은 별도 계약 PR에서 세 명의 승인을 받는다.
+
+## D-042 이벤트 기반 복구 대기열
+
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: v1 워커는 연결을 끝까지 소유한다. 백엔드 선택을 기다리는 요청을 워커에서 재우면 정적·CGI 요청 처리까지 막힐 수 있다. v2 poller와 연결 상태 머신은 기준 develop에서 스텁이다.
+- 결정: 현행 v1은 즉시 503으로 종료한다. 독립 v2 작업에서 이벤트 루프가 그룹별 FIFO의 conn 참조와 서버 전체 대기 상한 100개를 소유한다. 최초 enqueue에 단조 시계로 3초 절대 마감을 저장하고 대체 백엔드나 실패한 시험 요청 이후에도 유지한다. 가장 빠른 cooldown 종료가 마감 이후면 즉시 503을 반환한다. 동시 수용량에 자리가 날 때 FIFO 머리부터 예약하고 해당 요청만 재개한다. 마감, 클라이언트 종료, 서버 종료, 예약 성공은 동일한 루프에서 한 번만 노드를 제거한다. 재개 시에는 대기 FD 감시를 제거하고 새 relay를 등록하며 실패하면 예약을 반환한다.
+- 대안: blocking 워커의 sleep, 요청당 대기 스레드, 복구 시 전체 대기 요청을 일괄 깨우기.
+- 영향: `engine/` 이벤트 경로, `downstream/conn.c`, `upstream/`. 시계가 앞서는 백엔드, 포화, 취소, 종료 및 타임아웃 경합을 독립 엔진 테스트로 검증한다.
+
+## D-043 운영 설정과 로컬 Forward Proxy
+
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: LB와 복구 정책을 선택하고 absolute-form을 명시적으로 허용할 수 있어야 한다. 새 config 필드와 route kind는 공개 계약 변경에 해당한다.
+- 결정: 현재 작업은 시작 환경 변수와 기존 upstream 및 Host route 설정을 사용한다. Forward Proxy는 로컬 리스너와 로컬 클라이언트, 운영자가 지정한 한 포트, 숫자 loopback 주소의 단일 백엔드가 모두 일치할 때만 연다. 운영 설정을 config 문법과 타입으로 옮기거나 허용 호스트·포트 목록을 늘리는 작업에는 별도 계약 PR과 팀 승인을 적용한다.
+- 대안: absolute-form의 DNS를 요청별로 조회해 임의의 공인 주소를 허용.
+- 영향: `upstream/backend.c`, `downstream/conn.c`, `downstream/uri.c`, `downstream/request_parser.c`, Forward Proxy 회귀 스크립트.
+
+## D-044 프록시 청크 응답 재직렬화
+
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: 업스트림 청크 경계를 원본 그대로 전달하면 받은 줄 끝과 트레일러도 노출된다. 다운스트림이 프레이밍을 직접 만들면 검증 단계와 클라이언트에 전달하는 경계를 맞출 수 있다.
+- 결정: HTTP/1.1 프록시는 공용 추적기로 청크를 검증한 뒤 데이터만 정규 CRLF 청크로 송신한다. 확장과 트레일러는 검증하되 중계하지 않고 메타데이터 크기는 응답 머리 상한으로 제한한다. 본문 중 오류에는 마지막 청크를 보내지 않는다. HTTP/1.0 청크 응답은 D-034에 따라 머리 전 502를 사용한다.
+- 대안: 원본 청크와 트레일러 중계.
+- 영향: `downstream/conn.c`, `upstream/response_parser.c`, E-PX-05, E-PX-12 및 프레이밍 회귀 스크립트.
+
+## D-045 AI 라우팅: 그룹별 picker와 고정 키 해싱
+- 상태: 제안
+- 날짜: 2026-11-24
+- 맥락: LLM 벤치(`bench/`)에서 라운드로빈은 요청 수는 고르게 나누지만, 같은 대화가 매번 다른 백엔드로 가서 prefix 캐시를 살리지 못한다(보정: 캐시 적중 시 prefill 약 99% 감소). 기획서 FR-LB-01·03, FR-LLM-08.
+- 결정: 설정에 `picker <그룹> rr | hash | bounded [<pct>]`를 추가한다(`upstream_conf_t.picker`, `bound_pct`). `upstream_pick_key(g, key, key_len, exclude, now_ms)`를 새 파일 `upstream/lb_key.c`에 추가해 `X-Session-Id` 헤더를 키로 rendezvous hashing으로 고르고(키는 `proxy_job_t.affinity_key`로 relay까지 전달해 첫 시도의 연결 예약 때 쓴다), bounded면 처리 중 수가 상한(평균 × pct/100 올림) 이상인 백엔드를 건너뛴다. 처리 중 수는 기존 `backend.active`(연결 예약~반납)를 그대로 쓴다. 일반 프록시의 선택(`lb.c`, D-041~D-043의 rr·least_requests·p2c)은 바꾸지 않고, picker 줄이 있는 그룹만 이 경로를 탄다(수평 확장). 재시도(`proxy_on_fail`)는 키를 모르므로 기존 경로 그대로.
+- 대안: 모듈로 해싱(백엔드 수가 바뀌면 키 대부분이 옮겨 감), 링 consistent hashing(백엔드가 적어 가상 노드가 필요 없는 rendezvous로 충분), 요청 본문에서 키 추출(FR-LLM-09, 본문 파싱 필요).
+- 영향: `core/config.h`·`config.c`, `common/types.h`(`proxy_job_t.affinity_key`), `upstream/upstream.h`·`lb_key.c`(새 파일)·`internal_state.h`(그룹 필드 2개)·`backend.c`(필드 채움)·`relay.c`(첫 시도 선택), `downstream/conn.c`(키 채움), `handler/proxy.c`. 기존 테스트 변화 없음. 검증은 bench 시나리오 C.
+- 기본 pct: `bounded`만 쓰면 200(`CFG_BOUND_PCT_DEFAULT`). 기본 picker는 계속 rr.
+- 근거 (2026-11-24, bench 시나리오 C, 백엔드 4대, 0.3 req/s, 대화 8개, 240초 × 3회, 이벤트 루프):
+  | 분포 | picker | TTFT p50 | TTFT p99 | 캐시 적중 | 넘침 |
+  | --- | --- | --- | --- | --- | --- |
+  | 균등 | rr | 3.8초 | 11.7초 | 31% | 80% |
+  | 균등 | hash | 1.8초 | 10.4초 (8.2~20.7) | 62% | 0% |
+  | 균등 | bounded 125 / 150 / 200 | 3.8 / 1.8 / 1.8초 | 15.1 / 14.6 / 12.9초 | 48 / 53 / 54% | 29 / 21 / 15% |
+  | Zipf 1.0 | rr | 3.8초 | 12.2초 | 27% | 75% |
+  | Zipf 1.0 | hash | 3.8초 | 29.1초 | 58% | 0% |
+  | Zipf 1.0 | bounded 125 / 150 / 200 | 3.8 / 3.8 / 3.2초 | 13.8 / 15.3 / 19.5초 | 36 / 39 / 45% | 39 / 31 / 19% |
+  - hash는 키가 적거나 치우치면 한 백엔드에 몰려(최대 동시 8, 슬롯 4) p99가 rr의 2.4배가 된다.
+  - bounded는 상한이 낮으면(125) 한가할 때 올림 때문에 상한이 1이 되어 자주 넘기고 캐시를 잃는다. 200에서 넘침이 가장 적고 균등 분포 p50이 hash와 같다.
+  - p99는 rr보다 낫다고 할 수 없다 (실행당 요청 약 55개라 p99 ≈ 최댓값, 3회 편차 큼). 처리 능력 탐색(속도마다 1회)에서는 1.2 req/s에서 bounded 125가 완료 0.44 req/s로 rr 0.31·hash 0.39보다 높았다.
+  - fake_llm의 처리 시간은 Ollama llama3.2:1b(M4)로 보정한 입력값이라 절대값이 아니라 상대 비교다.
+  - 위 수치는 통합 전 용민 구현(4단계·이벤트 루프, #45) 위에서 쟀다. 선택 규칙과 상한 계산은 같고 처리 중 수를 세는 시점(연결 예약~반납)도 같지만, 통합본에서는 다시 재지 않았다.
+
+## D-046 포워드 프록시는 `route … forward`로 켠다
+- 상태: 제안
+- 날짜: 2026-11-23 (ririzu 님 원안), 2026-11-25 (통합본에 맞춰 옮김)
+- 맥락: 과제 README는 Forward·Reverse 중 하나 이상을 요구한다. 리버스 프록시는 구현돼 있고, 포워드 프록시는 기획서 범위 밖이라 테스트 ID도 없다. 목적지가 요청마다 달라서 설정 시점에 백엔드를 만들 수 없다. D-043의 loopback 한정 포워드는 운영자가 정한 단일 포트만 연다.
+- 결정: 설정 `route <prefix> forward`로 켠다(기본 꺼짐, 열린 프록시는 내부망 접근 위험이 있다). absolute-form 요청(`GET http://host[:port]/…`)만 받고 origin-form이면 400. 목적지 백엔드는 `upstream_forward_backend`가 처음 볼 때 이름을 해석해 `"@forward"` 그룹(`CFG_FORWARD_UPSTREAM`)에 더하고, 같은 목적지는 유휴 연결 풀을 함께 쓴다. 목적지 상한은 그룹 배열 크기(`CFG_MAX_BACKENDS`)다. 목적지가 하나라 다른 백엔드로 재시도하지 않는다(실패 502, 응답 지연 504). conn의 `setup_proxy_job`이 목적지를 정하고 relay가 첫 시도에 그 백엔드를 예약한다. 전송·relay·v1·v2 경로는 리버스 프록시와 같다. forward route가 없으면 D-043의 동작은 그대로다.
+- 대안: 별도 포워드 전용 연결 경로 (relay·풀·v2 처리를 다시 만들어야 함), 기본으로 켬 (열린 프록시), 목적지 동적 배열 (원안은 256개. 통합본 그룹 구조는 고정 배열이라 그 상한을 그대로 쓴다).
+- 영향: `core/config.{h,c}`(`ROUTE_FORWARD`, `CFG_FORWARD_UPSTREAM`), `router/router.c`, `handler/{plan,proxy}.c`, `upstream/{upstream.h,backend.c,relay.c}`, `downstream/conn.c`. 이름 해석은 블로킹이라 v2에서는 처음 보는 목적지마다 루프가 잠깐 멈춘다. IPv6 리터럴 미지원. 테스트 E-FW-01은 기획서 밖 ID다.
+
+## D-047 포워드 프록시의 응답 캐시
+- 상태: 제안
+- 날짜: 2026-11-24 (ririzu 님 원안), 2026-11-25 (통합본에 맞춰 옮김)
+- 맥락: 과제 README는 포워드 프록시의 캐싱을 선택 항목으로 둔다. D-046으로 포워드 프록시가 생겼고 기획서에는 캐시 규칙이 없다. 응답 본문은 conn이 업스트림 버퍼에서 클라이언트로 바로 흘리므로(복사 없음), 캐시는 그 바이트를 따로 모아야 한다.
+- 결정: (1) 포워드 경로(`route … forward`)의 GET만 다룬다. 리버스 프록시·정적·CGI는 캐시하지 않는다. (2) 저장 조건: 상태 200, Content-Length로 끝이 정해진 응답, 본문이 `cache_entry_max` 이하, 신선도가 있음(`s-maxage` → `max-age`, `Age`만큼 뺌, 상한 하루). `no-store`·`no-cache`·`private`·`Vary`·`Set-Cookie`가 있으면 저장하지 않는다. `Expires`와 휴리스틱 신선도는 쓰지 않는다. (3) 요청에 `Authorization`·`Range`·`no-cache`·`no-store`(또는 `Pragma: no-cache`)가 있으면 저장본을 쓰지 않고, `Authorization`·`Range`·`no-store`면 응답도 저장하지 않는다. (4) 같은 URL로 POST가 오면 그 항목을 지운다. (5) 적중 응답은 `Age`와 `X-Cache: HIT`를, 원본까지 간 포워드 GET은 `X-Cache: MISS`를 붙인다. (6) 저장소는 프로세스 하나에 하나, 뮤텍스로 보호하고 총 바이트 상한(`cache_max_bytes`, 기본 8 MiB, 0이면 끔)을 넘으면 가장 오래 안 쓴 항목부터 지운다. 키는 absolute-form 대상(스킴·호스트는 소문자). (7) 조회는 conn의 `setup_proxy_job`이 첫 시도 전에 `proxy_cache_begin`으로 하고(적중이면 이름 해석·연결 없이 응답), 복사는 conn의 업스트림 본문 전달 두 곳(v1 `upstream_send_body`, v2 `nb_upstream_body`)에서 `proxy_body_tee`·`proxy_body_done`으로 한다.
+- 대안: 캐시 미스 때 handler가 원본에서 블로킹으로 통째로 받아 오기 (v2 루프가 응답 시간만큼 멈춤), 캐시를 서버 시작 때 `upstream` 그룹에 묶기 (handler가 upstream 내부 상태를 알아야 함), 해시 표 (항목이 수백 개인 규모에서는 연결 리스트로 충분하다. 코드에 `shortcut:` 주석).
+- 영향: `handler/{cache.c,internal_cache.h,proxy.c,handler.h}`, `downstream/conn.c`, `common/types.h`(`proxy_job_t.fill`), `core/config.{h,c}`(`cache_max_bytes`, `cache_entry_max`). E-FW-02~E-FW-07 (두 엔진).

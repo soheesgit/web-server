@@ -32,14 +32,18 @@
 ## 테스트
 | 범위 | ID |
 | --- | --- |
-| 현재(기능) | E-* 전체 (v1 엔진으로), E-SL-01~02 (동시 처리) |
+| 현재(기능) | E-* 전체 (v1·v2), E-SL-01~02 (동시 처리) |
 | 현재(계약 최소셋) | U-EN-01, 02, 05 |
+| 추가 계약 | U-EN-03 (작업 큐 포화), U-EN-06 (이벤트 병합·정지·재개·등록 해제) |
 | 추후 | U-EN-01~12 중 나머지 |
 
 ## 구현 단계
 5단계 `engine` v1: B `engine_pool`. 7단계(선택) v2: A `poller_*` · C `engine_loop`.
-- [ ] engine_pool (v1)
-- [ ] poller_epoll
-- [ ] poller_kqueue
-- [ ] poller_poll
-- [ ] engine_loop (v2)
+- [x] engine_pool (v1)
+- [x] poller_epoll
+- [x] poller_kqueue
+- [x] poller_poll
+- [x] engine_loop (v2)
+
+Stage 5의 종료·과부하 검증과 워커 수·큐 크기 비교는 [스레드 풀 검증 및 측정](../../docs/benchmarks/stage5-workers.md)을 참고한다.
+Stage 7의 실행 방법과 비교 결과는 [동시성 엔진 비교](../../docs/benchmarks/stage7-engines.md)에 있다. fd 등록은 연결별로 소유하며, 이벤트 배치가 끝날 때 등록 객체를 해제한다. 단조 시계 마감은 최소 힙으로 관리한다.

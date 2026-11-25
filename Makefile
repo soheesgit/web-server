@@ -7,6 +7,7 @@ PYTHON       ?= python3
 CLANG_FORMAT ?= clang-format
 BUILD        ?= build
 PENDING      ?= tests/pending.txt
+REVERSE_PROXY_CONF ?= conf/reverse-proxy.conf
 UNAME_S      := $(shell uname -s)
 
 WARN      := -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror
@@ -31,25 +32,35 @@ TEST_SRCS := $(wildcard tests/unit/*.c tests/unit/contract_min/*.c tests/fakes/*
 LIB_OBJS  := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(LIB_SRCS))
 MAIN_OBJ  := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(filter $(MAIN_SRC),$(SRCS)))
 TEST_OBJS := $(patsubst tests/%.c,$(BUILD)/obj/tests/%.o,$(TEST_SRCS))
-DEPS      := $(LIB_OBJS:.o=.d) $(MAIN_OBJ:.o=.d) $(TEST_OBJS:.o=.d)
+PROPS_OBJ := $(BUILD)/obj/tests/robust/props.o
+DEPS      := $(LIB_OBJS:.o=.d) $(MAIN_OBJ:.o=.d) $(TEST_OBJS:.o=.d) $(PROPS_OBJ:.o=.d)
 
-BIN      := $(BUILD)/httpd
-UNIT_BIN := $(BUILD)/run_unit
+BIN       := $(BUILD)/httpd
+UNIT_BIN  := $(BUILD)/run_unit
+PROPS_BIN := $(BUILD)/props
 
 FMT_FILES := $(wildcard src/*/*.c src/*/*.h tests/unit/*.c tests/unit/*.h \
-                        tests/unit/contract_min/*.c tests/fakes/*.c tests/fakes/*.h)
+                        tests/unit/contract_min/*.c tests/fakes/*.c tests/fakes/*.h tests/robust/*.c)
 
 ONLY_ARG := $(if $(ONLY),--only $(ONLY),)
+ENGINE_ARG := $(if $(ENGINE),--engine $(ENGINE),)
 
-.PHONY: all unit e2e test lint asan clean
+.PHONY: all reverse-proxy unit e2e test lint asan robust robust-run clean
 
 all: $(BIN)
+
+reverse-proxy: $(BIN)
+	exec env HTTPD_PROXY_LB=least_requests "$(BIN)" -c "$(REVERSE_PROXY_CONF)" $(if $(ENGINE),-e "$(ENGINE)",)
 
 $(BIN): $(LIB_OBJS) $(MAIN_OBJ)
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(UNIT_BIN): $(LIB_OBJS) $(TEST_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(PROPS_BIN): $(LIB_OBJS) $(PROPS_OBJ)
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(LDLIBS)
 
@@ -68,12 +79,12 @@ unit: $(UNIT_BIN)
 	$(UNIT_BIN) --pending $(PENDING) $(ONLY_ARG)
 
 e2e: $(BIN)
-	$(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG)
+	$(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG) $(ENGINE_ARG)
 
 # unit과 e2e를 모두 돌리고 두 요약 줄을 합친 줄을 마지막에 출력한다.
 test: $(BIN) $(UNIT_BIN)
 	@{ $(UNIT_BIN) --pending $(PENDING) $(ONLY_ARG); echo $$? > $(BUILD)/unit.rc; } | tee $(BUILD)/unit.log
-	@{ $(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG); \
+	@{ $(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --pending $(PENDING) $(ONLY_ARG) $(ENGINE_ARG); \
 	   echo $$? > $(BUILD)/e2e.rc; } | tee $(BUILD)/e2e.log
 	@echo "=== unit + e2e ==="
 	@cat $(BUILD)/unit.log $(BUILD)/e2e.log | awk -F'[ :,]+' \
@@ -98,6 +109,19 @@ asan:
 	$(MAKE) BUILD=build-asan \
 	  EXTRA_CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
 	  EXTRA_LDFLAGS="-fsanitize=address,undefined" test
+
+# 기획서 ID 밖의 보조 스위트 (tests/robust/README.md): 성질 검사와 공격·경계 E2E를 두 엔진으로,
+# ASan + UBSan 빌드에서 돌린다. SEED로 무작위 입력열을 바꾼다.
+robust:
+	$(MAKE) BUILD=build-asan \
+	  EXTRA_CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+	  EXTRA_LDFLAGS="-fsanitize=address,undefined" robust-run
+
+robust-run: $(BIN) $(PROPS_BIN)
+	$(PROPS_BIN) $(SEED)
+	$(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --tests 'tests/robust/test_*.py' $(ONLY_ARG)
+	HTTPD_ENGINE=loop $(PYTHON) tests/e2e/run_e2e.py --bin $(BIN) --tests 'tests/robust/test_*.py' \
+	  $(ONLY_ARG)
 
 clean:
 	rm -rf build build-asan

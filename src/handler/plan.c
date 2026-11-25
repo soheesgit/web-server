@@ -189,6 +189,7 @@ handler_result_t handler_dispatch(const http_request_t *req, const route_t *rt,
     case ROUTE_CGI:
         return cgi_handle(req, rt, ctx, out_plan);
     case ROUTE_PROXY:
+    case ROUTE_FORWARD:
         return proxy_begin(req, rt, ctx, out_job, out_plan);
     }
     (void)plan_error(out_plan, 500);

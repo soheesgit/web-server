@@ -1,70 +1,156 @@
-/* src/engine/poller_epoll.c
- *
- * Linux epoll poller (D-022: 빌드 대상에 맞는 파일 하나만 심볼을 정의). 명세: poller.h
- */
+/* Linux epoll. 빌드 대상 선택은 D-022를 따른다. */
 #if defined(__linux__) && !defined(HTTPD_FORCE_POLL)
 #include "engine/poller.h"
-#include "core/stub.h"
 
-#include <stddef.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
+#include <unistd.h>
+
+#include "engine/internal_poller.h"
+
+struct poller {
+    int fd;
+    poll_table_t table;
+    struct epoll_event *ready;
+    int ready_cap;
+};
 
 poller_t *poller_new(void)
 {
-    /* TODO(engine): 구현 — U-EN-05 */
-    STUB_RETURN(NULL);
+    poller_t *p = calloc(1, sizeof(*p));
+    if (p == NULL) {
+        return NULL;
+    }
+    p->fd = epoll_create1(EPOLL_CLOEXEC);
+    if (p->fd < 0) {
+        poller_free(p);
+        return NULL;
+    }
+    return p;
+}
+
+static int change(poller_t *p, int fd, unsigned before, unsigned after)
+{
+    if (before == 0 && after == 0) {
+        return 0;
+    }
+    struct epoll_event event = {.data.fd = fd};
+    if (after & POLLER_READ) {
+        event.events |= EPOLLIN | EPOLLRDHUP;
+    }
+    if (after & POLLER_WRITE) {
+        event.events |= EPOLLOUT;
+    }
+    int op = before == 0 ? EPOLL_CTL_ADD : after == 0 ? EPOLL_CTL_DEL : EPOLL_CTL_MOD;
+    return epoll_ctl(p->fd, op, fd, &event);
 }
 
 int poller_add(poller_t *p, int fd, unsigned events, void *ptr)
 {
-    UNUSED(p);
-    UNUSED(fd);
-    UNUSED(events);
-    UNUSED(ptr);
-    /* TODO(engine): 구현 — U-EN-05 */
-    STUB_RETURN(-1);
+    if (!poll_mask_valid(events)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (poll_lookup(&p->table, fd) != NULL) {
+        errno = EEXIST;
+        return -1;
+    }
+    if ((events == 0 && fcntl(fd, F_GETFD) < 0) || poll_reserve(&p->table, fd) != 0 ||
+        change(p, fd, 0, events) != 0) {
+        return -1;
+    }
+    poll_store(&p->table, fd, events, ptr);
+    return 0;
 }
 
 int poller_mod(poller_t *p, int fd, unsigned events, void *ptr)
 {
-    UNUSED(p);
-    UNUSED(fd);
-    UNUSED(events);
-    UNUSED(ptr);
-    /* TODO(engine): 구현 — (테스트 없음) */
-    STUB_RETURN(-1);
+    poll_slot_t *slot = poll_lookup(&p->table, fd);
+    if (slot == NULL || !poll_mask_valid(events)) {
+        errno = slot == NULL ? ENOENT : EINVAL;
+        return -1;
+    }
+    if (slot->events != events && change(p, fd, slot->events, events) != 0) {
+        return -1;
+    }
+    poll_store(&p->table, fd, events, ptr);
+    return 0;
 }
 
 int poller_del(poller_t *p, int fd)
 {
-    UNUSED(p);
-    UNUSED(fd);
-    /* TODO(engine): 구현 — (테스트 없음) */
-    STUB_RETURN(-1);
+    poll_slot_t *slot = poll_lookup(&p->table, fd);
+    if (slot == NULL) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (change(p, fd, slot->events, 0) != 0) {
+        return -1;
+    }
+    poll_erase(&p->table, fd);
+    return 0;
 }
 
 int poller_wait(poller_t *p, poller_event_t *out, int max, int timeout_ms)
 {
-    UNUSED(p);
-    UNUSED(out);
-    UNUSED(max);
-    UNUSED(timeout_ms);
-    /* TODO(engine): 구현 — U-EN-05 */
-    STUB_RETURN(-1);
+    if (max < 1 || timeout_ms < -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (max > p->ready_cap) {
+        struct epoll_event *events = realloc(p->ready, (size_t)max * sizeof(*events));
+        if (events == NULL) {
+            return -1;
+        }
+        p->ready = events;
+        p->ready_cap = max;
+    }
+    int rc = epoll_wait(p->fd, p->ready, max, timeout_ms);
+    if (rc < 0) {
+        return errno == EINTR ? 0 : -1;
+    }
+    int n = 0;
+    for (int i = 0; i < rc; i++) {
+        int fd = p->ready[i].data.fd;
+        poll_slot_t *slot = poll_lookup(&p->table, fd);
+        if (slot == NULL || slot->events == 0) {
+            continue;
+        }
+        uint32_t ev = p->ready[i].events;
+        unsigned mask = 0;
+        if (ev & (EPOLLIN | EPOLLRDHUP)) {
+            mask |= POLLER_READ;
+        }
+        if (ev & EPOLLOUT) {
+            mask |= POLLER_WRITE;
+        }
+        if (ev & (EPOLLERR | EPOLLHUP)) {
+            mask |= POLLER_ERROR;
+        }
+        out[n++] = (poller_event_t){fd, mask, slot->ptr};
+    }
+    return n;
 }
 
 void poller_free(poller_t *p)
 {
-    UNUSED(p);
-    /* TODO(engine): 구현 — U-EN-05 */
+    if (p != NULL) {
+        int saved = errno;
+        if (p->fd >= 0) {
+            close(p->fd);
+        }
+        free(p->table.slots);
+        free(p->ready);
+        free(p);
+        errno = saved;
+    }
 }
 
 const char *poller_backend_name(void)
 {
-    /* TODO(engine): 구현 — (테스트 없음) */
-    STUB_RETURN("");
+    return "epoll";
 }
 
 #else
-/* 이 플랫폼에서는 다른 poller 파일이 쓰인다. 빈 번역 단위 경고를 피하기 위한 선언. */
 typedef int poller_epoll_unused_t;
 #endif

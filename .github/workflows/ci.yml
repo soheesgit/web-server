@@ -35,6 +35,16 @@ jobs:
       - name: Test (unit + e2e)
         run: make test
 
+      - name: Test (event loop e2e)
+        run: make e2e ENGINE=loop
+
       - name: ASan + UBSan (Linux)
         if: runner.os == 'Linux'
-        run: make asan
+        run: |
+          make asan
+          make asan ENGINE=loop
+
+      # 기획서 ID 밖의 보조 스위트: 성질 검사 + 공격·경계 E2E (tests/robust/README.md)
+      - name: Robustness suite (Linux)
+        if: runner.os == 'Linux'
+        run: make robust

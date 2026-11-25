@@ -6,12 +6,13 @@
 
 | 층 | 범위 | ID | 위치 | 실행 |
 | --- | --- | --- | --- | --- |
-| 기능 (E2E) | **현재** | `E-<분류>-NN` (ST·CG·PX·KA·ER·SL·CF), 68개 | `tests/e2e/test_*.py` | `make e2e` |
+| 기능 (E2E) | **현재** | `E-<분류>-NN` (ST·CG·PX·KA·ER·SL·CF·FW), 75개 | `tests/e2e/test_*.py` | `make e2e` |
 | 계약 최소셋 | **현재** | `U-<영역>-NN` 중 56개 | `tests/unit/contract_min/test_<영역>.c` | `make unit` |
-| 추가 계약 | **현재** | Stage 1의 `U-CORE-*` 8개와 `U-COM-*` 5개, Stage 3의 `U-HD-19` | `tests/unit/contract_min/` | `make unit` |
+| 추가 계약 | **현재** | Stage 1의 `U-CORE-*` 8개와 `U-COM-*` 5개, Stage 3의 `U-HD-19`, Stage 5의 `U-EN-03` | `tests/unit/contract_min/` | `make unit` |
 | 단위 (나머지) | 추후 | `U-<영역>-NN` | `tests/unit/` | `make unit` |
 | 경계 | 추후 | `C-NN` | (추후 `tests/contract/`) | — |
 | 비기능 | 추후 | `N-<분류>-NN` | (추후 `tests/nonfunc/`) | — |
+| 보조 (성질·공격) | **현재** | ID 체계 밖: 성질 이름, E2E `R-NN` | `tests/robust/` (README 참고) | `make robust` |
 
 영역 약어: `CORE`, `COM`(common), `DS`(downstream), `RT`(router), `HD`(handler: plan·static·mime·cgi), `PX`(handler/proxy), `US`(upstream), `EN`(engine).
 
@@ -50,14 +51,20 @@ FAIL             E-PX-03  hop-by-hop removed  (expected 200, got 502)
 | `make e2e` | `python3 tests/e2e/run_e2e.py --bin build/httpd --pending tests/pending.txt` |
 | `make test` | 위 둘 + 합계 줄 |
 | `make test ONLY=E-PX` | ID 접두사로 거르기 (unit·e2e 공통) |
+| `make test ENGINE=loop` | 계약 테스트와 v2 엔진의 E2E 테스트 |
 | `build/run_unit --list`, `run_e2e.py --list` | 등록된 ID 목록 |
 | `run_e2e.py -v`, `run_unit -v` | 실패·pending 사유 출력 |
 | `make asan` | ASan + UBSan 빌드(`build-asan/`)로 `make test` |
+| `make robust` | 보조 스위트: 성질 검사 + 공격·경계 E2E를 두 엔진으로, ASan 빌드. pending 없음 |
 
 - **run_unit** (C): 테스트마다 `fork()`한 자식에서 실행하고 자식은 `alarm(5)`를 건다. 시그널 종료(스텁이 돌려준 NULL 역참조 등)와 타임아웃은 실패다. 스텁 상태에서 크래시하는 것이 정상이므로 격리가 필수다.
 - **run_e2e** (Python 표준 라이브러리만): 테스트당 30초 제한. 예외·타임아웃·`ServerStartError`는 실패다. 응답 파서는 `http.client`를 쓰지 않고 직접 구현했다(비정상 응답을 감추지 않도록).
 
 E2E 공통 판정: `harness.Server`가 끝날 때 서버가 살아 있는지, 좀비 자식이 없는지, (Linux에서) 열린 fd 수가 시작 때로 돌아왔는지 확인하고 어기면 그 테스트는 실패다. 프록시 테스트는 백엔드당 유휴 연결 상한만큼 fd 여유를 둔다.
+
+Stage 5 프로세스 검증은 `python3 tests/bench/worker_verify.py`로 실행한다. 스레드 풀 과부하, 시그널 종료, FD 한도 복구를 루프백에서 재현한다.
+
+Stage 7에서는 Linux ASan·UBSan을 `make asan`과 `make asan ENGINE=loop`로 실행한다. `make BUILD="$(mktemp -d)" EXTRA_CFLAGS=-DHTTPD_FORCE_POLL test ENGINE=loop`는 POSIX poll 경로를 명시적으로 검증한다.
 
 ## 4. fake와 fixture
 

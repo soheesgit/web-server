@@ -31,5 +31,7 @@
 ## 구현 단계
 5단계 `engine` v1 + `app`. 분담: A `app`, `main`(시그널) · C E2E 스위트 연결.
 - [x] main — `--help`와 스텁 종료 (initial commit, 7.3절 예외)
-- [ ] main — 전체 흐름
-- [ ] app
+- [x] main — 전체 흐름
+- [x] app
+
+Stage 7에서 `-e loop`가 이벤트 콜백과 끝나지 않은 I/O의 감시 등록을 사용한다. `-e pool`은 v1 스레드 풀을 선택한다.

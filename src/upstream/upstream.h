@@ -12,6 +12,7 @@
 
 #include "core/buf.h"
 #include "core/config.h"
+#include "core/str.h"
 
 /**
  * 백엔드 하나 (불투명): 해석된 주소, 연속 실패 횟수, 제외 만료 시각, 유휴 연결 목록.
@@ -153,6 +154,54 @@ struct upstream_group *upstream_lookup_cb(void *ctx, const char *name);
  * 테스트:  U-US-17, E-PX-01, E-PX-08, E-PX-09 · 추후 U-US-18~21
  */
 backend_t *upstream_pick(upstream_group_t *g, const backend_t *exclude, int64_t now_ms);
+
+/**
+ * 고정 키로 백엔드를 고른다 (D-045 제안). picker 줄이 있는 그룹(AI 라우팅)만 쓰는 경로다.
+ *
+ * 그룹의 picker 설정(upstream_conf_t.picker)에 따라:
+ *   - RR이거나 key_len이 0이면 upstream_pick(g, exclude, now_ms)와 같다.
+ *   - HASH: 후보(upstream_eligible이고 exclude가 아닌 백엔드) 중 rendezvous 점수
+ *     hash(key) ⊕ hash(hostport)를 섞은 값이 가장 큰 백엔드. 같은 키는 후보가 같으면 항상 같은 곳.
+ *   - BOUNDED: 상한 = 올림((후보들의 처리 중 수 합 + 1) × bound_pct / (100 × 후보 수)).
+ *     점수 순서대로 보며 처리 중 수가 상한보다 적은 첫 후보. 그런 후보는 항상 있다.
+ * 처리 중 수는 연결 예약(checkout)~반납 사이의 수(backend의 active)다. 후보가 없으면 NULL.
+ *
+ * @param g        그룹. NULL 불가
+ * @param key      고정 키 바이트 (대화 ID 등). key_len이 0이면 NULL 허용
+ * @param key_len  키 길이
+ * @param exclude  건너뛸 백엔드. NULL 허용
+ * @param now_ms   현재 단조 시각
+ * @return         백엔드, 없으면 NULL
+ *
+ * 에러:    없음
+ * 소유권:  레지스트리를 빌린 포인터
+ * 스레드:  [thread-safe]
+ * I/O:     없음
+ * 블로킹:  짧은 mutex
+ * 테스트:  bench (시나리오 C) · 추후 단위 테스트
+ */
+backend_t *upstream_pick_key(upstream_group_t *g, const char *key, size_t key_len,
+                             const backend_t *exclude, int64_t now_ms);
+
+/**
+ * 포워드 프록시 목적지의 백엔드를 돌려준다 (D-046 제안).
+ *
+ * authority는 "host[:port]"(포트가 없으면 80). 같은 "host:port"를 전에 만들었으면 그 백엔드를
+ * 돌려줘 유휴 연결 풀을 함께 쓴다. 처음 보는 목적지면 이름을 해석해 그룹에 더한다. 그룹의
+ * 목적지는 최대 CFG_MAX_BACKENDS개. IPv6 리터럴("[::1]")은 받지 않는다.
+ *
+ * @param g          upstream_lookup_cb(reg, CFG_FORWARD_UPSTREAM)이 돌려준 포워드 그룹. NULL 불가
+ * @param authority  absolute-form URI의 authority (http_request_t.host)
+ * @return           백엔드 (레지스트리 수명), NULL 실패
+ *
+ * 에러:    EINVAL (형식·이름 해석 실패), E2BIG (목적지 수 상한)
+ * 소유권:  레지스트리가 소유 (해제 금지)
+ * 스레드:  [thread-safe]
+ * I/O:     이름 해석 (getaddrinfo)
+ * 블로킹:  처음 보는 목적지의 이름 해석
+ * 테스트:  E-FW-01
+ */
+backend_t *upstream_forward_backend(upstream_group_t *g, str_t authority);
 
 /**
  * 그룹의 백엔드 수를 돌려준다.

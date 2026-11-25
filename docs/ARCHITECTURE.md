@@ -51,7 +51,7 @@ conn이 계획을 실행한다: `response_write_head`로 머리를 쓰고 종류
 4. `handler_dispatch`가 route 종류에 따라 처리기를 부른다.
    - **정적**: 루트 + 정규화 경로 → realpath 접두사 검사 → open·fstat → `BODY_FILE`.
    - **CGI**: 스크립트 확인 → pipe 2개 → fork·execve → `BODY_PIPE`. conn이 요청 본문을 stdin에 쓰면서 stdout을 읽고, `cgi_parse_head`로 머리를 확정한다.
-   - **프록시**: 그룹에서 백엔드를 골라 업스트림 요청을 직렬화하고 `HANDLER_NEED_UPSTREAM`을 돌려준다. 이후는 4절.
+   - **프록시**: v1 conn이 그룹에서 백엔드 시도를 예약하고 선택 대상에 맞는 요청을 직렬화한다. 이후는 4절.
 5. conn이 `response_write_head`로 상태 줄·헤더를 쓰고 본문을 보낸다. 접근 로그를 한 줄 남긴다.
 6. keep-alive면 처리한 만큼 수신 버퍼를 비우고 2로, 아니면 닫고 자원을 회수한다.
 
@@ -59,8 +59,8 @@ conn이 계획을 실행한다: `response_write_head`로 머리를 쓰고 종류
 
 나누는 기준은 "판단인가, 기다림이 있는 I/O인가"다.
 
-- **판단**은 `handler/proxy.c`: 어느 백엔드로 보낼지(`proxy_begin`), 실패 시 재시도할지(`proxy_on_fail`), 응답 머리를 어떻게 클라이언트 머리로 바꿀지(`proxy_on_head`). 소켓 없이 테스트할 수 있다.
-- **기다림**은 `upstream/relay.c`: 연결 획득, 요청 송신, 응답 머리 수신. 재시도 여부는 판단하지 않고 실패 이유(`proxy_fail_t`)만 돌려준다. v2에서는 engine에 fd를 등록해 기다린다.
+- **판단**은 `handler/proxy.c`: 실패 시 재시도할지(`proxy_on_fail`), 응답 머리를 어떻게 클라이언트 머리로 바꿀지(`proxy_on_head`). 소켓 없이 테스트할 수 있다.
+- **기다림**은 `upstream/relay.c`: 백엔드 시도 예약, 연결 획득, 요청 송신, 응답 머리 수신. v1 conn은 relay 단계마다 업스트림과 클라이언트 fd를 함께 poll한다. 같은 대상의 유휴 연결에서 0바이트 송신 실패가 난 경우 새 연결을 한 번 연다.
 - **응답 본문 중계**는 conn: `BODY_UPSTREAM` 계획을 받아 업스트림 fd에서 읽은 바이트를 경계 추적기가 끝을 알릴 때까지 클라이언트에 보낸다. 끝나면 연결을 풀에 반납할지 닫을지 정한다.
 
 conn이 이 셋을 엮는 정확한 순서는 `downstream/conn.h`의 `conn_serve_blocking` 명세에 있다.
@@ -77,6 +77,12 @@ conn이 이 셋을 엮는 정확한 순서는 `downstream/conn.h`의 `conn_serve
 
 엔진은 연결 객체를 `void *`로만 다루며 HTTP를 모른다. conn은 두 엔진에 같은 객체를 쓴다(`conn_env_t.nonblocking`으로 경로 선택).
 
+v2는 연결별로 클라이언트 소켓·relay·CGI pipe 등록을 소유한다. 등록이 해제되면 이벤트 배치 끝까지 포인터를 남겨, 같은 배치에 있는 이전 이벤트와 FD 번호 재사용을 구분한다. 다음 마감은 최소 힙으로 관리한다. 콜백당 작업량을 제한하고, 느린 클라이언트의 출력이 밀리면 응답 소스 읽기를 잠시 멈춘다. 정적 파일의 로컬 파일 I/O와 CGI의 생성·회수는 기존 시스템 호출을 사용한다. [동시성 엔진 비교](benchmarks/stage7-engines.md)
+
 ## 6. 시작과 종료
 
 `main` → `config_load` → `log_open` → SIGPIPE 무시 → SIGINT·SIGTERM 핸들러(플래그만 설정) → `app_new`(limits 변환 → upstream 레지스트리 → router → listener → engine) → `app_run` → `app_free` → `log_close`. 종료 플래그가 서면 engine은 새 연결을 받지 않고 진행 중 연결을 유예 시간만큼 기다린다. 종료 코드는 `src/app/main.c` 머리 주석에 있다.
+
+## 7. 운영 문서
+
+Stage 4의 설정, 복구 상태, 연결 소유권 및 Forward Proxy 범위는 [Stage 4 프록시 구현 및 검증](PROXY_STAGE4.md)에서 확인할 수 있다.

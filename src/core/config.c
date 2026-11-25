@@ -52,6 +52,8 @@ void config_defaults(config_t *out_cfg)
     out_cfg->backend_cooldown_ms = 10000;
     out_cfg->pool_max_idle = 8;
     out_cfg->shutdown_grace_ms = 5000;
+    out_cfg->cache_max_bytes = 8388608;
+    out_cfg->cache_entry_max = 1048576;
     out_cfg->access_log[0] = '\0';
     out_cfg->error_log[0] = '\0';
     out_cfg->n_upstreams = 0;
@@ -190,6 +192,8 @@ static const knob_t knobs[] = {
     KNOB(backend_cooldown_ms, KNOB_INT),
     KNOB(pool_max_idle, KNOB_INT),
     KNOB(shutdown_grace_ms, KNOB_INT),
+    KNOB(cache_max_bytes, KNOB_INT),
+    KNOB(cache_entry_max, KNOB_INT),
 };
 #undef KNOB
 
@@ -201,7 +205,10 @@ static int apply_knob(cfg_ctx_t *c, const knob_t *k, str_t val)
                                           : UINT64_MAX;
     uint64_t v;
 
-    if (parse_uint(val, max, &v) != 0) {
+    /* cache_max_bytes만 0(캐시 끔)을 받는다 (D-047) */
+    if (str_eq(val, "0") && strcmp(k->name, "cache_max_bytes") == 0) {
+        v = 0;
+    } else if (parse_uint(val, max, &v) != 0) {
         return cfg_fail_at(c, c->line, EINVAL, "%s: invalid value '%.*s'", k->name, pf_len(val),
                            val.ptr);
     }
@@ -247,7 +254,7 @@ static int parse_route(cfg_ctx_t *c, const str_t *tok, size_t n, str_t host)
     route_conf_t *r;
     size_t i = 3;
 
-    if (n < 4) {
+    if (n < 3 || (n < 4 && !str_eq(tok[2], "forward"))) {
         return cfg_fail_at(c, c->line, EINVAL, "route: expected 'route <prefix> <kind> ...'");
     }
     if (c->cfg->n_routes >= CFG_MAX_ROUTES) {
@@ -284,6 +291,10 @@ static int parse_route(cfg_ctx_t *c, const str_t *tok, size_t n, str_t host)
             r->keep_host = true;
             i++;
         }
+    } else if (str_eq(tok[2], "forward")) {
+        r->kind = ROUTE_FORWARD;
+        r->keep_host = true; /* 목적지에는 URI에 적힌 authority를 Host로 보낸다 (D-046) */
+        (void)snprintf(r->upstream, sizeof(r->upstream), "%s", CFG_FORWARD_UPSTREAM);
     } else {
         return cfg_fail_at(c, c->line, EINVAL, "route: unknown kind '%.*s'", pf_len(tok[2]),
                            tok[2].ptr);
@@ -336,6 +347,45 @@ static int parse_upstream(cfg_ctx_t *c, const str_t *tok, size_t n)
     return 0;
 }
 
+/* picker <그룹> rr | hash | bounded [<pct>]  (D-045 제안). 그룹은 먼저 정의되어 있어야 한다. */
+static int parse_picker(cfg_ctx_t *c, const str_t *tok, size_t n)
+{
+    upstream_conf_t *u = NULL;
+    uint64_t pct = 0;
+
+    if (n < 3) {
+        return cfg_fail_at(c, c->line, EINVAL, "picker: expected 'picker <upstream> <kind>'");
+    }
+    for (size_t i = 0; i < c->cfg->n_upstreams; i++) {
+        if (str_eq(tok[1], c->cfg->upstreams[i].name)) {
+            u = &c->cfg->upstreams[i];
+        }
+    }
+    if (u == NULL) {
+        return cfg_fail_at(c, c->line, EINVAL, "picker: unknown upstream '%.*s'", pf_len(tok[1]),
+                           tok[1].ptr);
+    }
+    if (n == 3 && str_eq(tok[2], "rr")) {
+        u->picker = CFG_PICK_RR;
+    } else if (n == 3 && str_eq(tok[2], "hash")) {
+        u->picker = CFG_PICK_HASH;
+    } else if (n == 3 && str_eq(tok[2], "bounded")) {
+        u->picker = CFG_PICK_BOUNDED;
+        u->bound_pct = CFG_BOUND_PCT_DEFAULT;
+        return 0;
+    } else if (n == 4 && str_eq(tok[2], "bounded") && parse_uint(tok[3], 10000, &pct) == 0 &&
+               pct > 100) {
+        u->picker = CFG_PICK_BOUNDED;
+        u->bound_pct = (int)pct;
+        return 0;
+    } else {
+        return cfg_fail_at(c, c->line, EINVAL,
+                           "picker: expected rr, hash or 'bounded [<pct over 100>]'");
+    }
+    u->bound_pct = 0;
+    return 0;
+}
+
 /* 한 줄의 토큰들을 지시어로 적용한다. n ≥ 1. */
 static int apply_directive(cfg_ctx_t *c, const str_t *tok, size_t n)
 {
@@ -348,6 +398,9 @@ static int apply_directive(cfg_ctx_t *c, const str_t *tok, size_t n)
     }
     if (str_eq(d, "route")) {
         return parse_route(c, tok, n, no_host);
+    }
+    if (str_eq(d, "picker")) {
+        return parse_picker(c, tok, n);
     }
     if (str_eq(d, "host")) {
         if (n < 3 || !str_eq(tok[2], "route")) {
@@ -555,7 +608,7 @@ static int validate(cfg_ctx_t *c, const char *file_path)
                 return cfg_fail_at(c, c->route_line[i], EINVAL, "undefined upstream '%s'",
                                    r->upstream);
             }
-        } else if (!is_dir(r->root)) {
+        } else if (r->kind != ROUTE_FORWARD && !is_dir(r->root)) {
             return cfg_fail_at(c, c->route_line[i], errno, "route %s: not a directory: %s",
                                r->prefix, r->root);
         }

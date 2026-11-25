@@ -49,11 +49,15 @@ def main():
     ap.add_argument("--bin", default=os.path.join(harness.REPO, "build", "httpd"))
     ap.add_argument("--pending", default=None)
     ap.add_argument("--only", default=None)
+    ap.add_argument("--engine", choices=("pool", "loop"))
     ap.add_argument("--list", action="store_true")
     ap.add_argument("-v", action="store_true", dest="verbose")
+    # 보조 스위트(tests/robust)가 같은 실행기를 쓰도록 테스트 모듈 위치만 바꿀 수 있게 한다.
+    ap.add_argument("--tests", default=os.path.join(HERE, "test_*.py"))
     args = ap.parse_args()
 
-    for path in sorted(glob.glob(os.path.join(HERE, "test_*.py"))):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(args.tests)))
+    for path in sorted(glob.glob(args.tests)):
         importlib.import_module(os.path.splitext(os.path.basename(path))[0])
     tests = sorted(harness.REGISTRY, key=lambda t: t[0])
     if args.only:
@@ -65,6 +69,7 @@ def main():
         return 0
 
     harness.BIN = os.path.abspath(args.bin)
+    harness.ENGINE = args.engine
     if not os.access(harness.BIN, os.X_OK):
         print(f"run_e2e: {harness.BIN} not found or not executable", file=sys.stderr)
         return 2
