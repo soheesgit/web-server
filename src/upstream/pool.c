@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "core/platform.h"
+#include "upstream/internal_demo_trace.h"
 
 static void close_entry(pool_entry_t *p)
 {
@@ -210,5 +211,6 @@ void upstream_release(upstream_conn_t *c, bool reusable)
     if (!keep) {
         close_entry(p);
     }
+    demo_trace_state(g);
     errno = saved;
 }

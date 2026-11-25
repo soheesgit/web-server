@@ -37,6 +37,8 @@
 | 추후 | U-US-01~36 중 나머지 |
 
 ## 구현 단계
+
+발표 데모의 선택·예약·실패 관측은 `demo_trace.c`가 담당한다. `demo/run.py`가 지정한 루프백 수집기로 이벤트를 보낸다. 후보 정보는 그룹 잠금 아래에서 복사하고 송신은 잠금 밖에서 수행한다.
 4단계 (`upstream` + `handler` PROXY). 분담: A `request_writer`, `response_parser` · B `pool`, `lb` · C `backend`, `relay`. 7단계(선택) C `relay` 이벤트 경로.
 - [x] request_writer
 - [x] response_parser
