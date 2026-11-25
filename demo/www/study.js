@@ -49,7 +49,7 @@ function makeStudent(name, index) {
   };
 }
 
-const students = ["민지", "준호", "서연"].map(makeStudent);
+const students = ["민지", "준호", "서연", "지우"].map(makeStudent);
 let selected = students[0];
 let totalRequests = 0;
 let cursor = 0;
@@ -240,6 +240,15 @@ function createLog(request) {
   byId("log-count").textContent = ++totalRequests + "건";
 }
 
+function redistributedForLoad(request) {
+  if (!request.backend || request.error) return false;
+  return request.attempts.some(attempt =>
+    attempt.backend === request.backend && !attempt.error && attempt.failures.length === 0 &&
+    attempt.choices.some(choice => choice.policy === "bounded" &&
+      choice.candidates.some(candidate => candidate.rank === 1 && candidate.reason === "limit" &&
+        candidate.backend !== attempt.backend)));
+}
+
 function renderLog(request) {
   const status = request.status == null ? (request.pending ? "진행 중" : "응답 없음") : String(request.status);
   const badge = create("span", status, "status");
@@ -259,6 +268,9 @@ function renderLog(request) {
     const cacheBadge = create("span", "캐시 " + cacheStatus, "status cache-status");
     cacheBadge.dataset.kind = cacheStatus === "HIT" ? "ok" : "neutral";
     meta.append(cacheBadge);
+  }
+  if (redistributedForLoad(request)) {
+    meta.append(create("span", "부하 분산", "status balance-status"));
   }
   request.summary.replaceChildren(create("span", request.student.name, "request-name"), meta);
 

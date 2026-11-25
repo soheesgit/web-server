@@ -149,6 +149,7 @@ input, select { min-width: 0; background: white; color: var(--ink); border: 1px 
 .status[data-kind="ok"] { background: var(--ok-bg); color: var(--ok); }
 .status[data-kind="error"] { background: var(--error-bg); color: var(--error); }
 .cache-status[data-kind="neutral"] { background: #e7ebf4; color: var(--muted); }
+.balance-status { background: #eee8fb; color: #573783; }
 .request-detail { border-top: 1px solid var(--line); padding: 9px 10px 10px; }
 .request-path { color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
 .request-question { margin-top: 3px; font-weight: 600; overflow-wrap: anywhere; }
