@@ -261,7 +261,7 @@
 - 영향: `.github/workflows/ci.yml`, `README.md`.
 
 ## D-031 루트 README는 main의 과제 요구사항 문서를 그대로 유지
-- 상태: 확정
+- 상태: 폐기 (D-049로 대체)
 - 날짜: 2026-11-20
 - 맥락: 지시문 10.1절대로 루트 README를 프로젝트 안내로 새로 썼으나(D-028), 저장소 주인이 main의 README를 덮어쓰지 말라고 요청했다.
 - 결정: develop의 `README.md`를 main과 같은 내용(과제 요구사항)으로 되돌린다. 빌드·실행·테스트 방법은 `docs/TESTING.md`와 `tests/README.md`, 디렉토리 안내는 `docs/ARCHITECTURE.md`와 각 `src/<dir>/README.md`, 협업 규칙은 `AGENTS.md`와 `docs/CONVENTIONS.md`에서 본다.
@@ -392,3 +392,11 @@
 - 결정: (1) 포워드 경로(`route … forward`)의 GET만 다룬다. 리버스 프록시·정적·CGI는 캐시하지 않는다. (2) 저장 조건: 상태 200, Content-Length로 끝이 정해진 응답, 본문이 `cache_entry_max` 이하, 신선도가 있음(`s-maxage` → `max-age`, `Age`만큼 뺌, 상한 하루). `no-store`·`no-cache`·`private`·`Vary`·`Set-Cookie`가 있으면 저장하지 않는다. `Expires`와 휴리스틱 신선도는 쓰지 않는다. (3) 요청에 `Authorization`·`Range`·`no-cache`·`no-store`(또는 `Pragma: no-cache`)가 있으면 저장본을 쓰지 않고, `Authorization`·`Range`·`no-store`면 응답도 저장하지 않는다. (4) 같은 URL로 POST가 오면 그 항목을 지운다. (5) 적중 응답은 `Age`와 `X-Cache: HIT`를, 원본까지 간 포워드 GET은 `X-Cache: MISS`를 붙인다. (6) 저장소는 프로세스 하나에 하나, 뮤텍스로 보호하고 총 바이트 상한(`cache_max_bytes`, 기본 8 MiB, 0이면 끔)을 넘으면 가장 오래 안 쓴 항목부터 지운다. 키는 absolute-form 대상(스킴·호스트는 소문자). (7) 조회는 conn의 `setup_proxy_job`이 첫 시도 전에 `proxy_cache_begin`으로 하고(적중이면 이름 해석·연결 없이 응답), 복사는 conn의 업스트림 본문 전달 두 곳(v1 `upstream_send_body`, v2 `nb_upstream_body`)에서 `proxy_body_tee`·`proxy_body_done`으로 한다.
 - 대안: 캐시 미스 때 handler가 원본에서 블로킹으로 통째로 받아 오기 (v2 루프가 응답 시간만큼 멈춤), 캐시를 서버 시작 때 `upstream` 그룹에 묶기 (handler가 upstream 내부 상태를 알아야 함), 해시 표 (항목이 수백 개인 규모에서는 연결 리스트로 충분하다. 코드에 `shortcut:` 주석).
 - 영향: `handler/{cache.c,internal_cache.h,proxy.c,handler.h}`, `downstream/conn.c`, `common/types.h`(`proxy_job_t.fill`), `core/config.{h,c}`(`cache_max_bytes`, `cache_entry_max`). E-FW-02~E-FW-07 (두 엔진).
+
+## D-049 루트 README를 팀 발표용 프로젝트 안내로 전환
+- 상태: 제안
+- 날짜: 2026-11-25
+- 맥락: D-031에 따라 발표 초안을 docs에만 추가했으나, 저장소 소유자가 루트 README 자체를 변경하도록 요청했다.
+- 결정: 루트 README에 통합 프록시 구조, 상황별 라우팅, 성능 측정 과정과 결과, 실행·검증 방법을 둔다. 기존 과제 요구사항은 docs/ASSIGNMENT.md에 보존하고 기존 발표 데모 진입점도 루트 README에 유지한다. 중복 초안 docs/README_PRESENTATION_DRAFT.md는 제거한다. 이 PR에서 팀 검토를 받는다.
+- 대안: 발표 초안을 docs에만 두고 루트 README를 유지 (소유자가 루트 변경을 요청함).
+- 영향: README.md, docs/ASSIGNMENT.md, docs/README_PRESENTATION_DRAFT.md. 함수·타입·테스트 계약 변경 없음.
