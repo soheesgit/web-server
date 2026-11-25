@@ -6,7 +6,7 @@
 
 | 층 | 범위 | ID | 위치 | 실행 |
 | --- | --- | --- | --- | --- |
-| 기능 (E2E) | **현재** | `E-<분류>-NN` (ST·CG·PX·KA·ER·SL·CF), 68개 | `tests/e2e/test_*.py` | `make e2e` |
+| 기능 (E2E) | **현재** | `E-<분류>-NN` (ST·CG·PX·KA·ER·SL·CF·FW), 75개 | `tests/e2e/test_*.py` | `make e2e` |
 | 계약 최소셋 | **현재** | `U-<영역>-NN` 중 56개 | `tests/unit/contract_min/test_<영역>.c` | `make unit` |
 | 추가 계약 | **현재** | Stage 1의 `U-CORE-*` 8개와 `U-COM-*` 5개, Stage 3의 `U-HD-19`, Stage 5의 `U-EN-03` | `tests/unit/contract_min/` | `make unit` |
 | 단위 (나머지) | 추후 | `U-<영역>-NN` | `tests/unit/` | `make unit` |

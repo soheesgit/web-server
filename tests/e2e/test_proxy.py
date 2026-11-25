@@ -207,7 +207,7 @@ def _():
         expect_eq(request(s.port, "GET", "/index.html").status, 200, "proxy alive")
 
 
-# E-FW-01은 기획서 밖의 포워드 프록시(D-041)를 확인한다. 기획서 표에 없는 ID다.
+# E-FW-01은 기획서 밖의 포워드 프록시(D-046)를 확인한다. 기획서 표에 없는 ID다.
 @test("E-FW-01", "forward proxy: absolute-form GET reaches the named host")
 def _():
     with backends(Backend("echo")) as (b,), Server(conf="forward.conf", fd_slack=8) as s:
