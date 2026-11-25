@@ -11,12 +11,13 @@
 ## 파일
 | 파일 | 역할 | 그림의 블록 | 공개 함수 |
 | --- | --- | --- | --- |
-| `handler.h` | 처리기 진입점 선언 (static·cgi·proxy), 처리기 공통 계약 | — | `handler_dispatch`, `static_handle`, `cgi_handle`, `cgi_parse_head`, `proxy_begin`, `proxy_on_fail`, `proxy_on_head`, `proxy_job_cleanup` |
+| `handler.h` | 처리기 진입점 선언 (static·cgi·proxy), 처리기 공통 계약 | — | `handler_dispatch`, `static_handle`, `cgi_handle`, `cgi_parse_head`, `proxy_begin`, `proxy_on_fail`, `proxy_on_head`, `proxy_job_cleanup`, `proxy_cache_begin`, `proxy_body_tee`, `proxy_body_done` |
 | `plan.h` `plan.c` | 응답 계획 초기화·메모리 본문·에러 계획·헤더 추가·정리. `handler_dispatch`도 여기 둔다 | 응답 계획 | `plan_init`, `plan_set_mem`, `plan_error`, `plan_add_header`, `plan_cleanup`, `handler_dispatch` |
 | `mime.h` `mime.c` | 확장자 → Content-Type | STATIC: MIME | `mime_for_path` |
 | `static.c` | 정적 파일 계획 | STATIC 6단계 | `static_handle` |
 | `cgi.c` | CGI 시작, CGI 응답 머리 파싱 | CGI 6단계 | `cgi_handle`, `cgi_parse_head` |
-| `proxy.c` | 프록시 판단 | PROXY: 그룹 선택, 재시도 판단, 중계 준비 | `proxy_begin`, `proxy_on_fail`, `proxy_on_head`, `proxy_job_cleanup` |
+| `proxy.c` | 프록시 판단, 포워드 캐시 조회·복사 연결 | PROXY·FORWARD: 그룹 선택, 재시도 판단, 중계 준비 | `proxy_begin`, `proxy_on_fail`, `proxy_on_head`, `proxy_job_cleanup`, `proxy_cache_begin`, `proxy_body_tee`, `proxy_body_done` |
+| `cache.c` `internal_cache.h` | 포워드 프록시 응답 캐시 (D-047): 키, 신선도, 최근 사용 순 삭제 | — | (handler 안에서만 씀) |
 
 ## 의존
 - include 가능: `core`, `common`, `router`, `upstream`

@@ -376,3 +376,19 @@
   - p99는 rr보다 낫다고 할 수 없다 (실행당 요청 약 55개라 p99 ≈ 최댓값, 3회 편차 큼). 처리 능력 탐색(속도마다 1회)에서는 1.2 req/s에서 bounded 125가 완료 0.44 req/s로 rr 0.31·hash 0.39보다 높았다.
   - fake_llm의 처리 시간은 Ollama llama3.2:1b(M4)로 보정한 입력값이라 절대값이 아니라 상대 비교다.
   - 위 수치는 통합 전 용민 구현(4단계·이벤트 루프, #45) 위에서 쟀다. 선택 규칙과 상한 계산은 같고 처리 중 수를 세는 시점(연결 예약~반납)도 같지만, 통합본에서는 다시 재지 않았다.
+
+## D-046 포워드 프록시는 `route … forward`로 켠다
+- 상태: 제안
+- 날짜: 2026-11-23 (ririzu 님 원안), 2026-11-25 (통합본에 맞춰 옮김)
+- 맥락: 과제 README는 Forward·Reverse 중 하나 이상을 요구한다. 리버스 프록시는 구현돼 있고, 포워드 프록시는 기획서 범위 밖이라 테스트 ID도 없다. 목적지가 요청마다 달라서 설정 시점에 백엔드를 만들 수 없다. D-043의 loopback 한정 포워드는 운영자가 정한 단일 포트만 연다.
+- 결정: 설정 `route <prefix> forward`로 켠다(기본 꺼짐, 열린 프록시는 내부망 접근 위험이 있다). absolute-form 요청(`GET http://host[:port]/…`)만 받고 origin-form이면 400. 목적지 백엔드는 `upstream_forward_backend`가 처음 볼 때 이름을 해석해 `"@forward"` 그룹(`CFG_FORWARD_UPSTREAM`)에 더하고, 같은 목적지는 유휴 연결 풀을 함께 쓴다. 목적지 상한은 그룹 배열 크기(`CFG_MAX_BACKENDS`)다. 목적지가 하나라 다른 백엔드로 재시도하지 않는다(실패 502, 응답 지연 504). conn의 `setup_proxy_job`이 목적지를 정하고 relay가 첫 시도에 그 백엔드를 예약한다. 전송·relay·v1·v2 경로는 리버스 프록시와 같다. forward route가 없으면 D-043의 동작은 그대로다.
+- 대안: 별도 포워드 전용 연결 경로 (relay·풀·v2 처리를 다시 만들어야 함), 기본으로 켬 (열린 프록시), 목적지 동적 배열 (원안은 256개. 통합본 그룹 구조는 고정 배열이라 그 상한을 그대로 쓴다).
+- 영향: `core/config.{h,c}`(`ROUTE_FORWARD`, `CFG_FORWARD_UPSTREAM`), `router/router.c`, `handler/{plan,proxy}.c`, `upstream/{upstream.h,backend.c,relay.c}`, `downstream/conn.c`. 이름 해석은 블로킹이라 v2에서는 처음 보는 목적지마다 루프가 잠깐 멈춘다. IPv6 리터럴 미지원. 테스트 E-FW-01은 기획서 밖 ID다.
+
+## D-047 포워드 프록시의 응답 캐시
+- 상태: 제안
+- 날짜: 2026-11-24 (ririzu 님 원안), 2026-11-25 (통합본에 맞춰 옮김)
+- 맥락: 과제 README는 포워드 프록시의 캐싱을 선택 항목으로 둔다. D-046으로 포워드 프록시가 생겼고 기획서에는 캐시 규칙이 없다. 응답 본문은 conn이 업스트림 버퍼에서 클라이언트로 바로 흘리므로(복사 없음), 캐시는 그 바이트를 따로 모아야 한다.
+- 결정: (1) 포워드 경로(`route … forward`)의 GET만 다룬다. 리버스 프록시·정적·CGI는 캐시하지 않는다. (2) 저장 조건: 상태 200, Content-Length로 끝이 정해진 응답, 본문이 `cache_entry_max` 이하, 신선도가 있음(`s-maxage` → `max-age`, `Age`만큼 뺌, 상한 하루). `no-store`·`no-cache`·`private`·`Vary`·`Set-Cookie`가 있으면 저장하지 않는다. `Expires`와 휴리스틱 신선도는 쓰지 않는다. (3) 요청에 `Authorization`·`Range`·`no-cache`·`no-store`(또는 `Pragma: no-cache`)가 있으면 저장본을 쓰지 않고, `Authorization`·`Range`·`no-store`면 응답도 저장하지 않는다. (4) 같은 URL로 POST가 오면 그 항목을 지운다. (5) 적중 응답은 `Age`와 `X-Cache: HIT`를, 원본까지 간 포워드 GET은 `X-Cache: MISS`를 붙인다. (6) 저장소는 프로세스 하나에 하나, 뮤텍스로 보호하고 총 바이트 상한(`cache_max_bytes`, 기본 8 MiB, 0이면 끔)을 넘으면 가장 오래 안 쓴 항목부터 지운다. 키는 absolute-form 대상(스킴·호스트는 소문자). (7) 조회는 conn의 `setup_proxy_job`이 첫 시도 전에 `proxy_cache_begin`으로 하고(적중이면 이름 해석·연결 없이 응답), 복사는 conn의 업스트림 본문 전달 두 곳(v1 `upstream_send_body`, v2 `nb_upstream_body`)에서 `proxy_body_tee`·`proxy_body_done`으로 한다.
+- 대안: 캐시 미스 때 handler가 원본에서 블로킹으로 통째로 받아 오기 (v2 루프가 응답 시간만큼 멈춤), 캐시를 서버 시작 때 `upstream` 그룹에 묶기 (handler가 upstream 내부 상태를 알아야 함), 해시 표 (항목이 수백 개인 규모에서는 연결 리스트로 충분하다. 코드에 `shortcut:` 주석).
+- 영향: `handler/{cache.c,internal_cache.h,proxy.c,handler.h}`, `downstream/conn.c`, `common/types.h`(`proxy_job_t.fill`), `core/config.{h,c}`(`cache_max_bytes`, `cache_entry_max`). E-FW-02~E-FW-07 (두 엔진).
