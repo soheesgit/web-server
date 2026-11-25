@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>스터디룸 · C 웹 서버 데모</title>
+  <link rel="stylesheet" href="/study.css?v=2">
+  <script type="module" src="/study.js?v=2"></script>
+</head>
+<body>
+  <header class="page-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div><h1>스터디룸</h1><p>C 웹 서버 실시간 데모</p></div>
+    </div>
+    <div class="runtime">
+      <span class="runtime-config" id="runtime-config"></span>
+      <span class="connection" id="connection" role="status">서버 연결 중</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div class="workspace">
+      <section class="panel chat-panel" aria-labelledby="chat-title">
+        <header class="panel-heading">
+          <div><h2 id="chat-title">AI 학습 채팅</h2><p>학습 자료 · 이진 탐색</p></div>
+          <button type="button" class="button secondary" id="student-add">+ 학생 추가</button>
+        </header>
+        <div class="student-list" id="student-list" aria-label="학생 선택"></div>
+        <div class="chat" id="chat" role="log" aria-label="선택한 학생의 대화"></div>
+        <div class="suggestions" id="suggestions"></div>
+        <form class="composer" id="composer">
+          <label class="visually-hidden" for="question">질문</label>
+          <input id="question" maxlength="400" placeholder="공부하다 궁금한 점을 물어보세요" required autocomplete="off">
+          <label class="visually-hidden" for="audience">질문을 보낼 학생</label>
+          <select id="audience">
+            <option value="student">선택 학생</option>
+            <option value="group">스터디 전체</option>
+          </select>
+          <button class="button primary" id="question-send">질문 보내기</button>
+        </form>
+      </section>
+
+      <section class="panel map-panel" aria-labelledby="map-title">
+        <header class="panel-heading">
+          <h2 id="map-title">학생과 서버 매칭</h2>
+          <output class="active-questions" id="active-questions" data-active="false">진행 중 0건</output>
+        </header>
+        <div class="match-head" aria-hidden="true"><span>학생</span><span>LLM 백엔드</span></div>
+        <div class="map" id="map">
+          <canvas id="connections" aria-hidden="true"></canvas>
+          <ul id="map-students" class="map-list"></ul>
+          <ul id="map-backends" class="map-list"></ul>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel log-panel" aria-labelledby="log-title">
+      <header class="panel-heading">
+        <div><h2 id="log-title">실시간 요청 로그</h2><p>요청을 펼쳐 서버가 선택한 이유를 확인하세요.</p></div>
+        <span class="log-count" id="log-count">0건</span>
+      </header>
+      <div class="logs" id="logs">
+        <p class="empty-log">질문을 보내면 여기에 요청 기록이 표시됩니다.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="student-dialog" aria-labelledby="student-dialog-title">
+    <form id="student-form">
+      <h2 id="student-dialog-title">학생 추가</h2>
+      <label for="student-name">이름</label>
+      <input id="student-name" maxlength="16" placeholder="예: 하린" required autocomplete="off">
+      <div class="dialog-actions">
+        <button type="button" class="button secondary" id="student-cancel">취소</button>
+        <button class="button primary">학생 추가</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

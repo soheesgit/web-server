@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include "core/platform.h"
+#include "upstream/internal_demo_trace.h"
 #include "upstream/internal_state.h"
 #include "upstream/response_parser.h"
 
@@ -29,6 +30,7 @@ struct relay {
 
 static relay_status_t fail(relay_t *r, proxy_fail_t why, bool endpoint_failure)
 {
+    demo_trace_failure(r->job, why);
     if (endpoint_failure && r->conn != NULL) {
         upstream_report(r->conn->backend, false, platform_now_ms());
     }
@@ -56,6 +58,7 @@ relay_t *relay_start(proxy_job_t *job, const http_limits_t *lim, int64_t now_ms,
     backend_t *selected = NULL;
     backend_t *pinned = deferred ? NULL : job->backend;
     const backend_t *exclude = deferred ? job->backend : NULL;
+    demo_trace_begin(job);
     if (deferred && job->attempts == 1 && job->backend != NULL) {
         /* 포워드(D-046): 목적지가 첫 시도 전에 정해져 있다 */
         pinned = job->backend;
@@ -66,7 +69,10 @@ relay_t *relay_start(proxy_job_t *job, const http_limits_t *lim, int64_t now_ms,
         pinned = upstream_pick_key(job->group, job->affinity_key.ptr, job->affinity_key.len, NULL,
                                    now_ms);
     }
-    if (upstream_checkout(job->group, pinned, exclude, &selected, &r->conn) != 0) {
+    int checkout = upstream_checkout(job->group, pinned, exclude, &selected, &r->conn);
+    demo_trace_attempt(selected, checkout != 0 ? errno : 0);
+    demo_trace_state(job->group);
+    if (checkout != 0) {
         r->phase = FAILED;
         r->why = PFAIL_CONNECT;
     } else {

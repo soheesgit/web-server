@@ -1,6 +1,7 @@
 /* 고정 키 선택 (AI 라우팅). 명세: upstream.h upstream_pick_key, D-045.
  * 일반 프록시의 선택(lb.c)은 건드리지 않고, picker 줄이 있는 그룹만 이 경로를 쓴다. */
 #include "upstream/internal_state.h"
+#include "upstream/internal_demo_trace.h"
 
 #include <string.h>
 
@@ -34,11 +35,13 @@ backend_t *upstream_pick_key(upstream_group_t *g, const char *key, size_t key_le
     uint64_t kh;
     size_t n = 0;
     size_t total = 1; /* 이번 요청 포함 */
+    size_t cap = 0;
     backend_t *picked = NULL;
 
     if (g->picker == CFG_PICK_RR || key_len == 0) {
         return upstream_pick(g, exclude, now_ms);
     }
+    uint64_t started = demo_trace_clock_us();
     kh = hash_bytes(key, key_len);
     pthread_mutex_lock(&g->lock);
     /* 후보를 rendezvous 점수 내림차순으로 줄 세운다 (백엔드 최대 16대라 삽입 정렬) */
@@ -65,11 +68,28 @@ backend_t *upstream_pick_key(upstream_group_t *g, const char *key, size_t key_le
         picked = order[0];
     } else if (n > 0) {
         size_t denom = 100 * n;
-        size_t cap = (total * (size_t)g->bound_pct + denom - 1) / denom;
+        cap = (total * (size_t)g->bound_pct + denom - 1) / denom;
 
         for (size_t i = 0; i < n && picked == NULL; i++) {
             if (order[i]->active < cap) {
                 picked = order[i];
+            }
+        }
+    }
+    if (started != 0) {
+        bool bounded = g->picker == CFG_PICK_BOUNDED;
+        demo_trace_choice(bounded ? "bounded" : "hash", cap, started, picked);
+        for (size_t i = 0; i < n; i++) {
+            const char *reason = bounded && order[i]->active >= cap ? "limit" : "eligible";
+            demo_trace_candidate(order[i], reason, i + 1);
+        }
+        for (size_t i = 0; i < g->count; i++) {
+            const backend_t *b = &g->backends[i];
+            if (b == exclude) {
+                demo_trace_candidate(b, "excluded", 0);
+            } else if (!upstream_eligible(b, now_ms)) {
+                demo_trace_candidate(b, b->health == UP_COOLDOWN ? "cooldown" : "recovery-limit",
+                                     0);
             }
         }
     }

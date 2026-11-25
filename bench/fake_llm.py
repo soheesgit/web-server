@@ -261,8 +261,12 @@ async def handle(reader, writer, eng, a, ids):
             # 끝 조각을 쓰기 전에 끊김 감시를 멈춘다 (다음 요청 바이트를 먹지 않게)
             if watcher.done():
                 return
-            watcher.cancel()
             t_end = now_ms()
+            watcher.cancel()
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
             final = {
                 "done": True, "backend": a.id,
                 "usage": {"input_tokens": r.input_tokens, "output_tokens": r.generated,
