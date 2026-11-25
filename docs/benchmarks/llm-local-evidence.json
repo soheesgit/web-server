@@ -1,0 +1,2638 @@
+{
+  "description": "발표용 README에 사용한 로컬 측정 요약과 실행별 집계. 성능 실험 재실행 없이 기존 JSONL을 bench/analyze.py로 집계했다.",
+  "captured_on": "2026-11-25",
+  "units": "시간 ms, cache와 spill은 %, peak_inflight는 요청 수",
+  "limitations": [
+    "로컬 원본 bench/results는 gitignore 대상이다. 이 파일은 원본 전체를 대신하지 않는 요약 스냅샷이다.",
+    "11/24와 11/25 E0 원본에는 빌드 SHA가 없어 현재 바이너리와 동일성을 증명할 수 없다.",
+    "11/25 균등 분포 base 3회와 kv 첫 회는 측정 대상 요청이 1개뿐이므로 정책 비교에서 제외한다."
+  ],
+  "records": [
+    {
+      "source_directory": "bench/results/20261124-144854-e0",
+      "summary_sha256": "09c55eaea9d4dc768e17974e7872ee7669c54db71d3dc9453724413cb7e9165b",
+      "summary": "E0: 백엔드 1대, 동시 1개 (경합 없음). 지연 = 클라이언트 측정 - 백엔드 측정\n끊김 → 백엔드 감지 (ms, 중앙/최대, 끊은 수→감지 수): stream = 토큰 흐르는 중, prefill = 첫 토큰 전\n    path    n  ttft_med  overhead_med  overhead_p99  itl_med  itl_max_p99              stream med/max             prefill med/max\n  direct   20      65.0          1.64          1.85     18.2         32.0          0.5/    0.6 (10→10)          0.6/    0.7 (3→3)\n    loop   20      65.1          1.99          3.41     18.2         32.0         34.4/  102.3 (10→10)       2440.9/ 2455.0 (3→3)\n    pool   20      65.6          2.29          2.96     18.2         22.4         34.6/  100.5 (10→10)       2442.3/ 2458.9 (3→3)\n"
+    },
+    {
+      "source_directory": "bench/results/20261124-145052-e1",
+      "summary_sha256": "8cc3fc5c12543ba10dd18cb0795630bb787f4e2aa99ab81485d12d3358d3d9a0",
+      "summary": "E1: 백엔드 4대(병목 아님), 스트림 1500토큰(약 30초), pool workers=8\nengine  conc    n   ok  ttft_med  ttft_p99  total_med  itl_max_p99\n  loop     4    4    4        43        43      31629           51\n  loop     8    8    8        64        64      31703           39\n  loop    16   16   16       105       125      31801           81\n  loop    32   32   32       207       208      31995          162\n  loop    64   64   64       372       374      32233          282\n  pool     4    4    4        43        43      31662           42\n  pool     8    8    8        63        64      31707           47\n  pool    16   16    8        65        65      31727           42\n  pool    32   32    8        66        67      31659           43\n  pool    64   64    8        69        70      31685           40\n",
+      "pool_outcomes": {
+        "pool-c16.jsonl": {
+          "(200, None)": 8,
+          "(None, 'ConnectionResetError')": 8
+        },
+        "pool-c32.jsonl": {
+          "(200, None)": 8,
+          "(None, 'ConnectionResetError')": 24
+        },
+        "pool-c4.jsonl": {
+          "(200, None)": 4
+        },
+        "pool-c64.jsonl": {
+          "(200, None)": 8,
+          "(None, 'ConnectionResetError')": 56
+        },
+        "pool-c8.jsonl": {
+          "(200, None)": 8
+        }
+      }
+    },
+    {
+      "source_directory": "bench/results/20261124-150846-capacity-A",
+      "summary_sha256": "49ee24f2b3290d4ced19a4c87bdc0cdd913621e0640769fa8e22d3fd15a8cc79",
+      "summary": "capacity: scenario A, loop, backends 4, 속도마다 40s (워밍업 10s 제외), 도착 끝난 뒤 진행 중 요청까지 기다림\n rate  sent  done/s  short ttft p50      p99  all ttft p99  total p99  5xx/err\n  1.0    27    0.81             471      495           495       3116        0\n  2.0    66    1.96             491     2556          2556       6450        0\n  3.0    95    2.66            2554     5309          5309      10331        0\n  4.0   116    2.60            9640    12803         12803      17815        0\n  5.0   140    2.53           16104    22674         22674      27095        0\n"
+    },
+    {
+      "source_directory": "bench/results/20261124-151301-capacity-B",
+      "summary_sha256": "a742d853d73ea7413d4e851eaa938744f24231af430e9125ba21340c47d67f4e",
+      "summary": "capacity: scenario B, loop, backends 4, 속도마다 40s (워밍업 10s 제외), 도착 끝난 뒤 진행 중 요청까지 기다림\n rate  sent  done/s  short ttft p50      p99  all ttft p99  total p99  5xx/err\n  0.5    16    0.44             471      488          4521      15590        0\n  1.0    27    0.81             471      494           494       3822        0\n  1.5    38    1.00             481     1642          4521      17888        0\n  2.0    66    1.39             503     8658          8658      30258        0\n  2.5    82    1.29            2666    27400         27400      41413        0\n"
+    },
+    {
+      "source_directory": "bench/results/20261125-103238-e0",
+      "summary_sha256": "679ed908a51f69d0a7e546f04f58db55f08d2768522a2374a66aef0c9a94a149",
+      "summary": "E0: 백엔드 1대, 동시 1개 (경합 없음). 지연 = 클라이언트 측정 - 백엔드 측정\n끊김 → 백엔드 감지 (ms, 중앙/최대, 끊은 수→감지 수): stream = 토큰 흐르는 중, prefill = 첫 토큰 전\n    path    n  ttft_med  overhead_med  overhead_p99  itl_med  itl_max_p99              stream med/max             prefill med/max\n  direct   25      64.5          1.26          1.93     18.1         28.7          0.5/    0.6 (10→10)          0.5/    0.7 (3→3)\n    loop   25      65.1          1.90          2.52     18.2         18.9          0.6/    1.0 (10→10)          1.0/    1.3 (3→3)\n"
+    },
+    {
+      "source_directory": "bench/results/20261124-194320-C-loop-rr-z0.0-r0.3",
+      "summary_sha256": "173db13442b15118c286a82b9b9ea02104f237828d14b7118f7cd3095353d770",
+      "summary": "scenario C, engine loop, picker rr, zipf 0.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3811     9741    11721       9386    21566         7764\nper backend: b1=15  b2=15  b3=14  b4=15\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       2821     7761    11721       7336    29255         9059\nper backend: b1=13  b2=13  b3=13  b4=13\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3823    11180    14632       9962    28661        11724\nper backend: b1=15  b2=15  b3=14  b4=15\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-194320-C-loop-rr-z0.0-r0.3/run1.jsonl",
+          "sha256": "cc56faaf7a126060049e6a326f4f4752f2e64e57e83e9f3e1715ae78256b467d",
+          "backend_stats_sha256": "0baa38f6cff7e75937007a0e44ac06e6d4de2c652c6029ac53785c154abffe00",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3811.4249997138977,
+              "ttft99": 11720.965920057297,
+              "total99": 21565.58961996079,
+              "itlmax99": 7764.214659833908,
+              "queue99": 5100.434739875795,
+              "block99": 30.825380029678346,
+              "gw99": 8.753340015411395
+            },
+            "per_backend": {
+              "b4": 15,
+              "b1": 15,
+              "b2": 15,
+              "b3": 14
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 2,
+              "b3": 3,
+              "b4": 3
+            },
+            "spill": 79.66101694915254,
+            "cache": 30.824556896994604,
+            "skew": 1.0416616432212422,
+            "prefill_by_backend": {
+              "b1": 108000,
+              "b2": 101400,
+              "b3": 101600,
+              "b4": 103722
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-194320-C-loop-rr-z0.0-r0.3/run2.jsonl",
+          "sha256": "f6e063feabcdd4179819369a78716d0d875dd6ff354303178cabc128fdc82eb8",
+          "backend_stats_sha256": "c482c1d52db1912a6f6c3669819e88ee7d6cb6f4ccf0da9d2e1de33721511ee8",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 2820.792999982834,
+              "ttft99": 11720.67438012123,
+              "total99": 29254.83975028515,
+              "itlmax99": 9058.998890190127,
+              "queue99": 1004.4526502323151,
+              "block99": 24.82911994457245,
+              "gw99": 3.162419867515564
+            },
+            "per_backend": {
+              "b4": 13,
+              "b1": 13,
+              "b2": 13,
+              "b3": 13
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 2,
+              "b3": 1,
+              "b4": 2
+            },
+            "spill": 80.76923076923077,
+            "cache": 36.004969700043105,
+            "skew": 1.3144015934934752,
+            "prefill_by_backend": {
+              "b1": 91229,
+              "b2": 67200,
+              "b3": 62800,
+              "b4": 56400
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-194320-C-loop-rr-z0.0-r0.3/run3.jsonl",
+          "sha256": "b8200cbc886c41e699f9e63428becfe87f1feff4225bd062738aee066d0b0990",
+          "backend_stats_sha256": "b24840cbbebe3b6da4c6f93b41868798d98258dba23fc23d926e221926636197",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3823.2890000343323,
+              "ttft99": 14632.350059900287,
+              "total99": 28660.9472201252,
+              "itlmax99": 11723.838919878006,
+              "queue99": 7238.118800249102,
+              "block99": 30.833860445022584,
+              "gw99": 3.3282398509979254
+            },
+            "per_backend": {
+              "b4": 15,
+              "b1": 15,
+              "b2": 15,
+              "b3": 14
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 3,
+              "b3": 3,
+              "b4": 3
+            },
+            "spill": 74.57627118644068,
+            "cache": 27.540500736377027,
+            "skew": 1.1443089430894309,
+            "prefill_by_backend": {
+              "b1": 92800,
+              "b2": 112600,
+              "b3": 97400,
+              "b4": 90800
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-195609-C-loop-hash-z0.0-r0.3",
+      "summary_sha256": "d861262705827a8ce185ff40f7d145bac278c3d608d347ae4e42bf4b03990644",
+      "summary": "scenario C, engine loop, picker hash, zipf 0.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       1842    11858    20669      11049    34752         7780\nper backend: b1=7  b2=14  b3=14  b4=24\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       1822     5056     8233       8667    20675         5818\nper backend: b1=3  b2=13  b3=11  b4=25\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       1838     5828    10360       8634    24057         6568\nper backend: b1=11  b2=17  b3=12  b4=19\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-195609-C-loop-hash-z0.0-r0.3/run1.jsonl",
+          "sha256": "bde82ce23bdad7aec59a874b52ed585516db7ece45c47bbff988b13a8c774a9e",
+          "backend_stats_sha256": "33ff4b996e7aac95faeb72cd60f4934d8b9b6f9fb34de32b7e5715d337b6b3ed",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 1841.6550002098083,
+              "ttft99": 20669.21168028832,
+              "total99": 34751.50568006516,
+              "itlmax99": 7779.711099853515,
+              "queue99": 17995.34344043732,
+              "block99": 38.15484022140503,
+              "gw99": 4.552699909210205
+            },
+            "per_backend": {
+              "b1": 7,
+              "b4": 24,
+              "b3": 14,
+              "b2": 14
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 4,
+              "b3": 3,
+              "b4": 8
+            },
+            "spill": 0.0,
+            "cache": 61.878867429214324,
+            "skew": 1.812943573887991,
+            "prefill_by_backend": {
+              "b1": 32800,
+              "b2": 46896,
+              "b3": 44800,
+              "b4": 103200
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-195609-C-loop-hash-z0.0-r0.3/run2.jsonl",
+          "sha256": "855c3f2a5b6af92ecdc99d7860d97c9fdb890a6f76555798b0e8fa80f680394f",
+          "backend_stats_sha256": "324129ef5aa976ac368046e3dba0702b0c874d623d14b2a46574c180c103a8bf",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 1822.3424999713898,
+              "ttft99": 8232.958929901126,
+              "total99": 20675.469960160255,
+              "itlmax99": 5818.4160498809815,
+              "queue99": 5107.945390167244,
+              "block99": 2801.9087998724026,
+              "gw99": 3.738310208320618
+            },
+            "per_backend": {
+              "b3": 11,
+              "b4": 25,
+              "b2": 13,
+              "b1": 3
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 3,
+              "b3": 2,
+              "b4": 6
+            },
+            "spill": 0.0,
+            "cache": 62.86844179368642,
+            "skew": 1.775598614714316,
+            "prefill_by_backend": {
+              "b1": 14200,
+              "b2": 47200,
+              "b3": 28200,
+              "b4": 71522
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-195609-C-loop-hash-z0.0-r0.3/run3.jsonl",
+          "sha256": "0e150cb21deb63475fbc58279fac65f8bf87b00a3734e629455ec9f3051b9d59",
+          "backend_stats_sha256": "d5b5a7cf885e678f6146709417337a9dcbe649257126629a7a14282d6ed5bd9a",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 1837.8829998970032,
+              "ttft99": 10359.562920131688,
+              "total99": 24057.458540019998,
+              "itlmax99": 6567.696420259479,
+              "queue99": 5441.309179668433,
+              "block99": 1669.2318598651952,
+              "gw99": 4.078260307312013
+            },
+            "per_backend": {
+              "b2": 17,
+              "b1": 11,
+              "b3": 12,
+              "b4": 19
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 6,
+              "b4": 4
+            },
+            "spill": 0.0,
+            "cache": 62.44677831393699,
+            "skew": 1.4219893616521833,
+            "prefill_by_backend": {
+              "b1": 32800,
+              "b2": 54800,
+              "b3": 49681,
+              "b4": 75722
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-200840-C-loop-bounded125-z0.0-r0.3",
+      "summary_sha256": "1509563512f5968425e4045a8bdf370676b336100a8856da58bd9310d57dc76b",
+      "summary": "scenario C, engine loop, picker bounded:125, zipf 0.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3801    11430    15140       8368    22964         7592\nper backend: b1=10  b2=17  b3=13  b4=19\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       2058     7272     8034       8088    15111         4776\nper backend: b1=9  b2=12  b3=13  b4=18\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3802     7761    16171       9262    28693         9429\nper backend: b1=16  b2=17  b3=11  b4=15\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-200840-C-loop-bounded125-z0.0-r0.3/run1.jsonl",
+          "sha256": "0056b3ea3ed8edb4744242a01f0520abe7e270fdd0506657beb0b8e1ec14ceb2",
+          "backend_stats_sha256": "72715cb061f2430c1f91bdfc4fe9c8fdb03aba3fcc813b64cd11b3b542e1b221",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3801.196000099182,
+              "ttft99": 15139.744979906085,
+              "total99": 22963.532080087665,
+              "itlmax99": 7591.835559873581,
+              "queue99": 10276.082360057837,
+              "block99": 5791.812679948806,
+              "gw99": 4.11491988182068
+            },
+            "per_backend": {
+              "b1": 10,
+              "b4": 19,
+              "b3": 13,
+              "b2": 17
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 3,
+              "b3": 2,
+              "b4": 4
+            },
+            "spill": 32.20338983050848,
+            "cache": 45.77080491132333,
+            "skew": 1.2075471698113207,
+            "prefill_by_backend": {
+              "b1": 69200,
+              "b2": 75000,
+              "b3": 77800,
+              "b4": 96000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-200840-C-loop-bounded125-z0.0-r0.3/run2.jsonl",
+          "sha256": "ad55d62628f14d9dbbb740f452fcd6f2ceabbc8bcee62ce9cf02857015e6dfe0",
+          "backend_stats_sha256": "05690cd6215126012e2c8e5f9efc3cdf32b04a19d6f2ab3050b530d553658208",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 2058.362999677658,
+              "ttft99": 8033.661999859811,
+              "total99": 15110.5874098444,
+              "itlmax99": 4775.862180056576,
+              "queue99": 6027.608400030138,
+              "block99": 28.65525993347169,
+              "gw99": 3.2067098331451422
+            },
+            "per_backend": {
+              "b3": 13,
+              "b4": 18,
+              "b2": 12,
+              "b1": 9
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 2,
+              "b3": 2,
+              "b4": 3
+            },
+            "spill": 28.846153846153847,
+            "cache": 50.19011406844106,
+            "skew": 1.3893129770992367,
+            "prefill_by_backend": {
+              "b1": 43800,
+              "b2": 49800,
+              "b3": 43200,
+              "b4": 72800
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-200840-C-loop-bounded125-z0.0-r0.3/run3.jsonl",
+          "sha256": "4f7007863522b7f24a841e51b401a1fa0adce605d095766aac17ec6feab45eac",
+          "backend_stats_sha256": "898efd6d7b95f4240e2413895de71bb6e4f941cfaf00441dfe276040a02ebf0c",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3801.575999736786,
+              "ttft99": 16171.460859794628,
+              "total99": 28692.96062020302,
+              "itlmax99": 9428.639599666601,
+              "queue99": 6740.352059898381,
+              "block99": 2662.3095599937474,
+              "gw99": 3.77549958229065
+            },
+            "per_backend": {
+              "b2": 17,
+              "b1": 16,
+              "b4": 15,
+              "b3": 11
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 3,
+              "b4": 2
+            },
+            "spill": 22.033898305084747,
+            "cache": 47.790868924889544,
+            "skew": 1.1255289139633287,
+            "prefill_by_backend": {
+              "b1": 79800,
+              "b2": 68200,
+              "b3": 67400,
+              "b4": 68200
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-202119-C-loop-bounded150-z0.0-r0.3",
+      "summary_sha256": "2c9853b23cf8854ea52f607d144e59e2324b40dd88e1a620fbbf1dd3fd9f0228",
+      "summary": "scenario C, engine loop, picker bounded:150, zipf 0.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3801     7762    24462       8628    32851        10703\nper backend: b1=9  b2=15  b3=14  b4=21\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       1823     5754    11721       8105    16577         4775\nper backend: b1=8  b2=12  b3=12  b4=20\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       1827     7511    14634       8372    23919         8126\nper backend: b1=13  b2=16  b3=11  b4=19\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-202119-C-loop-bounded150-z0.0-r0.3/run1.jsonl",
+          "sha256": "03b6cecf34d0d6b8e023139de34d5f2e065793b375408b3af74dd857b109a869",
+          "backend_stats_sha256": "b684bd0c459cdcd0324a71b5c8e7e149c7ad61e17f5c5dd3fbe4f8e5daab406b",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3800.6209993362427,
+              "ttft99": 24461.600720109946,
+              "total99": 32851.11830014229,
+              "itlmax99": 10703.085619783422,
+              "queue99": 6974.123300046926,
+              "block99": 8279.614139766703,
+              "gw99": 3.354560117721558
+            },
+            "per_backend": {
+              "b1": 9,
+              "b4": 21,
+              "b2": 15,
+              "b3": 14
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 3,
+              "b3": 3,
+              "b4": 4
+            },
+            "spill": 27.11864406779661,
+            "cache": 47.27148703956344,
+            "skew": 1.2652005174644243,
+            "prefill_by_backend": {
+              "b1": 58400,
+              "b2": 84200,
+              "b3": 68800,
+              "b4": 97800
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-202119-C-loop-bounded150-z0.0-r0.3/run2.jsonl",
+          "sha256": "37dc56c39f15345054e7c415418f0ccd5c50cf8a37093a691791a42a9a103c76",
+          "backend_stats_sha256": "714871737828875fcaddde0fa1118942c5af228c323f466248254a17b5dcd2da",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 1823.3014998435974,
+              "ttft99": 11721.352479929925,
+              "total99": 16577.427909922604,
+              "itlmax99": 4775.493550195698,
+              "queue99": 4097.683020062449,
+              "block99": 28.64367005348207,
+              "gw99": 3.5248898220062257
+            },
+            "per_backend": {
+              "b3": 12,
+              "b4": 20,
+              "b2": 12,
+              "b1": 8
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 2,
+              "b3": 2,
+              "b4": 3
+            },
+            "spill": 21.153846153846153,
+            "cache": 53.32699619771863,
+            "skew": 1.384928716904277,
+            "prefill_by_backend": {
+              "b1": 48400,
+              "b2": 43200,
+              "b3": 36800,
+              "b4": 68000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-202119-C-loop-bounded150-z0.0-r0.3/run3.jsonl",
+          "sha256": "4a3370db367b9652c6bf36e87fe3f05e26dae00accb0df0f3083381c2afb1daa",
+          "backend_stats_sha256": "3a0f3eca04a0eb053e41849ad3e02b42f37658b81d703456768fb221f4b99e03",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 1826.7859997749329,
+              "ttft99": 14633.599719734202,
+              "total99": 23919.287400178917,
+              "itlmax99": 8125.72578025818,
+              "queue99": 11973.997240104682,
+              "block99": 31.426899824142456,
+              "gw99": 3.371040239334107
+            },
+            "per_backend": {
+              "b2": 16,
+              "b1": 13,
+              "b4": 19,
+              "b3": 11
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 3,
+              "b4": 3
+            },
+            "spill": 15.254237288135593,
+            "cache": 54.00410084616051,
+            "skew": 1.1929428015319896,
+            "prefill_by_backend": {
+              "b1": 58400,
+              "b2": 66200,
+              "b3": 54232,
+              "b4": 76000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-203355-C-loop-bounded200-z0.0-r0.3",
+      "summary_sha256": "054d3dbf8d8fa69496c1c9796ee9f9274bd8054000c416669ba4c4a86b6e95f6",
+      "summary": "scenario C, engine loop, picker bounded:200, zipf 0.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       1840     7469    12873       9426    20509         5791\nper backend: b1=8  b2=16  b3=14  b4=21\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       1828     5782    11722       8257    18629         5785\nper backend: b1=8  b2=12  b3=13  b4=19\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       1832     9183    18872       8337    28670         8284\nper backend: b1=14  b2=15  b3=13  b4=17\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-203355-C-loop-bounded200-z0.0-r0.3/run1.jsonl",
+          "sha256": "a91eccef4170c06bf9f6c13090d19365980b3832b9c2c84a98af983e8a98180b",
+          "backend_stats_sha256": "2e9eacc5f899f343dfd51b5de5b89f1becfc2b61456b3565971322c283083ce8",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 1840.1039996147156,
+              "ttft99": 12872.519620151525,
+              "total99": 20509.315560121537,
+              "itlmax99": 5790.720299663543,
+              "queue99": 8172.389000158311,
+              "block99": 1831.8435600185394,
+              "gw99": 4.07732006072998
+            },
+            "per_backend": {
+              "b1": 8,
+              "b4": 21,
+              "b3": 14,
+              "b2": 16
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 3,
+              "b3": 3,
+              "b4": 5
+            },
+            "spill": 11.864406779661017,
+            "cache": 54.02455661664393,
+            "skew": 1.4154302670623145,
+            "prefill_by_backend": {
+              "b1": 49800,
+              "b2": 70800,
+              "b3": 53600,
+              "b4": 95400
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-203355-C-loop-bounded200-z0.0-r0.3/run2.jsonl",
+          "sha256": "c7a9f141e7a3095794c84ccbaccb92e39f7b701625a7b1bdc4299f40d8d2cb34",
+          "backend_stats_sha256": "581dbc4514a664448bd2973a843c035ffbb0d1641f3586c13b8c8116af56bb35",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 1827.8960001468658,
+              "ttft99": 11721.516059980393,
+              "total99": 18629.478699626925,
+              "itlmax99": 5785.417560238839,
+              "queue99": 3629.611929764748,
+              "block99": 27.995530037879952,
+              "gw99": 3.249390025138855
+            },
+            "per_backend": {
+              "b3": 13,
+              "b4": 19,
+              "b2": 12,
+              "b1": 8
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 2,
+              "b3": 2,
+              "b4": 3
+            },
+            "spill": 23.076923076923077,
+            "cache": 51.23574144486692,
+            "skew": 1.4191033138401559,
+            "prefill_by_backend": {
+              "b1": 48400,
+              "b2": 47400,
+              "b3": 36600,
+              "b4": 72800
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-203355-C-loop-bounded200-z0.0-r0.3/run3.jsonl",
+          "sha256": "9ea7181b3bbec249f8f5fe614b804e999bad564f3a9ed0da7f525327f8d06fb5",
+          "backend_stats_sha256": "92d4705483a603cff10af1ab05628b9b4b93176a68f31273e85813e920146f0b",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 1832.3680000305176,
+              "ttft99": 18872.229800252917,
+              "total99": 28669.831000022892,
+              "itlmax99": 8284.047420339593,
+              "queue99": 11968.489860181815,
+              "block99": 31.91574019432068,
+              "gw99": 3.67386010169983
+            },
+            "per_backend": {
+              "b2": 15,
+              "b1": 14,
+              "b4": 17,
+              "b3": 13
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 3,
+              "b4": 3
+            },
+            "spill": 15.254237288135593,
+            "cache": 53.865979381443296,
+            "skew": 1.1779728651237031,
+            "prefill_by_backend": {
+              "b1": 73800,
+              "b2": 66200,
+              "b3": 40800,
+              "b4": 69800
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-204627-C-loop-rr-z1.0-r0.3",
+      "summary_sha256": "f6c808b84b521beba250b45f182a68afb118ba0ff9eb70245b46f533f22aa868",
+      "summary": "scenario C, engine loop, picker rr, zipf 1.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3819     9742    12240      11355    26259        11732\nper backend: b1=15  b2=15  b3=14  b4=15\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       3802     7787    11732       7563    20674        10715\nper backend: b1=13  b2=13  b3=13  b4=13\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       4007    11026    12786      10105    30493         9433\nper backend: b1=15  b2=15  b3=14  b4=15\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-204627-C-loop-rr-z1.0-r0.3/run1.jsonl",
+          "sha256": "824c3821442b14fceb61608058892d0f5bd7caad419df3fe9b1ca3d1b919be58",
+          "backend_stats_sha256": "02f6324b59acbbd2bf2051882247448c11ce1c69a84b04e7fd2c19c37a5eb4f9",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3819.2000002861023,
+              "ttft99": 12239.909460392,
+              "total99": 26258.78752010346,
+              "itlmax99": 11731.811520032883,
+              "queue99": 7300.4579603767415,
+              "block99": 31.788519763946532,
+              "gw99": 3.4147801780700684
+            },
+            "per_backend": {
+              "b1": 15,
+              "b4": 15,
+              "b3": 14,
+              "b2": 15
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 2,
+              "b3": 3,
+              "b4": 4
+            },
+            "spill": 74.57627118644068,
+            "cache": 27.32608088105909,
+            "skew": 1.1932223345819506,
+            "prefill_by_backend": {
+              "b1": 99200,
+              "b2": 92600,
+              "b3": 103800,
+              "b4": 125666
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-204627-C-loop-rr-z1.0-r0.3/run2.jsonl",
+          "sha256": "a64d46abcfc000c386f37d844b977fbd42b18eb320d7ee74a6e50371128e36e1",
+          "backend_stats_sha256": "0a51fc57cead88f8dbb48c638b85f750abfabc06986d410af62153b280c11e08",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 3801.8740000724792,
+              "ttft99": 11732.097039813996,
+              "total99": 20674.293870205885,
+              "itlmax99": 10714.883639988902,
+              "queue99": 1308.0102298736585,
+              "block99": 27.826640381813057,
+              "gw99": 4.720890011787415
+            },
+            "per_backend": {
+              "b4": 13,
+              "b1": 13,
+              "b2": 13,
+              "b3": 13
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 3,
+              "b3": 2,
+              "b4": 2
+            },
+            "spill": 76.92307692307692,
+            "cache": 27.6195074843071,
+            "skew": 1.0727151434289526,
+            "prefill_by_backend": {
+              "b1": 76000,
+              "b2": 69400,
+              "b3": 80400,
+              "b4": 74000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-204627-C-loop-rr-z1.0-r0.3/run3.jsonl",
+          "sha256": "6213827299de20571e9117b752ec3a1ec80e73c0ba7233c986bc93a0a3d5d119",
+          "backend_stats_sha256": "ea6f78e4c92745dcf47c24867f14c6bb7808b5502aa3d07421947ef8f6b60ee8",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 4006.9130001068115,
+              "ttft99": 12786.177699909214,
+              "total99": 30492.526180038458,
+              "itlmax99": 9432.782739973074,
+              "queue99": 7075.367420110705,
+              "block99": 34.47143987655641,
+              "gw99": 3.6279798603057865
+            },
+            "per_backend": {
+              "b4": 15,
+              "b1": 15,
+              "b2": 15,
+              "b3": 14
+            },
+            "peak_inflight": {
+              "b1": 4,
+              "b2": 3,
+              "b3": 3,
+              "b4": 4
+            },
+            "spill": 69.49152542372882,
+            "cache": 23.7990465713238,
+            "skew": 1.0644850818094322,
+            "prefill_by_backend": {
+              "b1": 106000,
+              "b2": 92800,
+              "b3": 106200,
+              "b4": 110600
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-205903-C-loop-hash-z1.0-r0.3",
+      "summary_sha256": "a47ae151ac7e897a8b6920f39c302e04d0507208ffcf1f2ca887b90a441698a9",
+      "summary": "scenario C, engine loop, picker hash, zipf 1.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3832    20547    33712      19496    46675         7778\nper backend: b2=15  b3=26  b4=18\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       1827     6869    29126       8288    37044         7778\nper backend: b1=1  b2=17  b3=18  b4=16\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       4054    20704    25274      19330    34444         8425\nper backend: b1=3  b2=24  b3=9  b4=23\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-205903-C-loop-hash-z1.0-r0.3/run1.jsonl",
+          "sha256": "870ff981ac36a8a5daa70f084dd3f41c2307262181f071c724fc847404981ef3",
+          "backend_stats_sha256": "0e40013984b724f8d0a0d59d5211017f0f8732064f9e83cb5197d617d33f1e18",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3831.5510001182556,
+              "ttft99": 33712.04434020998,
+              "total99": 46675.432140083314,
+              "itlmax99": 7778.201379957199,
+              "queue99": 27970.438700065624,
+              "block99": 3833.9323203372956,
+              "gw99": 4.252580223083497
+            },
+            "per_backend": {
+              "b2": 15,
+              "b3": 26,
+              "b4": 18
+            },
+            "peak_inflight": {
+              "b2": 8,
+              "b3": 7,
+              "b4": 8
+            },
+            "spill": 0.0,
+            "cache": 57.598231327038036,
+            "skew": 1.50551322755356,
+            "prefill_by_backend": {
+              "b1": 25200,
+              "b2": 64860,
+              "b3": 98750,
+              "b4": 73559
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-205903-C-loop-hash-z1.0-r0.3/run2.jsonl",
+          "sha256": "0727cf857da6895b88fca7eaced0cce5352943d80d46646e9c2ce50c11692644",
+          "backend_stats_sha256": "1077cecdb51039934c6ff2a306d0f4f71258fa81e304f7c41ff6171c209c4258",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 1826.7295002937317,
+              "ttft99": 29126.067169942864,
+              "total99": 37044.22702005387,
+              "itlmax99": 7778.252490053177,
+              "queue99": 22318.494419884693,
+              "block99": 2801.981370100979,
+              "gw99": 5.545180554389958
+            },
+            "per_backend": {
+              "b1": 1,
+              "b4": 16,
+              "b2": 17,
+              "b3": 18
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 4,
+              "b3": 6,
+              "b4": 3
+            },
+            "spill": 0.0,
+            "cache": 56.1169328983764,
+            "skew": 1.689401776858182,
+            "prefill_by_backend": {
+              "b1": 18600,
+              "b2": 40600,
+              "b3": 79200,
+              "b4": 49122
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-205903-C-loop-hash-z1.0-r0.3/run3.jsonl",
+          "sha256": "09449c7f6e4b328eeb0a904e151370aa20b0aaffe39e0bb117eb25248a164184",
+          "backend_stats_sha256": "1b39c734799fbc2a25c6b64c7289f10c7294e8deb84834118da68f6256f5e6eb",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 4054.247000694275,
+              "ttft99": 25274.469120149617,
+              "total99": 34444.45626012802,
+              "itlmax99": 8424.692080154422,
+              "queue99": 20182.96422001839,
+              "block99": 5792.279659767151,
+              "gw99": 4.491360521316529
+            },
+            "per_backend": {
+              "b3": 9,
+              "b2": 24,
+              "b1": 3,
+              "b4": 23
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 8,
+              "b3": 3,
+              "b4": 8
+            },
+            "spill": 0.0,
+            "cache": 58.922710228968114,
+            "skew": 1.515827797761266,
+            "prefill_by_backend": {
+              "b1": 16400,
+              "b2": 74122,
+              "b3": 51400,
+              "b4": 86600
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-211212-C-loop-bounded125-z1.0-r0.3",
+      "summary_sha256": "fe2cfe12bf2d55825ef561608d872ea7a6cc3a717aa85e1a17cb546320854b4a",
+      "summary": "scenario C, engine loop, picker bounded:125, zipf 1.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3824     9974    13797      11127    26292        11558\nper backend: b1=8  b2=15  b3=20  b4=16\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       1830     7762    12299       7725    18894         9706\nper backend: b1=6  b2=14  b3=15  b4=17\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3802    11747    18598      11520    36425        12508\nper backend: b1=11  b2=17  b3=14  b4=17\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-211212-C-loop-bounded125-z1.0-r0.3/run1.jsonl",
+          "sha256": "1e250679e54112ae03b29c607027e2037cc914833a3ec97ad412bab1e44b35a2",
+          "backend_stats_sha256": "f001e619450cacf5efec7b75814c75e9f202a22cd9878c75e7005f4dca042f33",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3824.256000518799,
+              "ttft99": 13796.726239995958,
+              "total99": 26292.129600172044,
+              "itlmax99": 11558.226139917373,
+              "queue99": 7189.561700048452,
+              "block99": 5164.3972802734515,
+              "gw99": 3.4949003124237064
+            },
+            "per_backend": {
+              "b1": 8,
+              "b4": 16,
+              "b2": 15,
+              "b3": 20
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 4,
+              "b3": 4,
+              "b4": 4
+            },
+            "spill": 38.983050847457626,
+            "cache": 35.72184962936816,
+            "skew": 1.271828665568369,
+            "prefill_by_backend": {
+              "b1": 58800,
+              "b2": 97400,
+              "b3": 115800,
+              "b4": 92200
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-211212-C-loop-bounded125-z1.0-r0.3/run2.jsonl",
+          "sha256": "61802d6c7ad22387ca9219c45708ffb26180765c6c1c17b4ea1808483d7d372b",
+          "backend_stats_sha256": "36e39963f7e7d9870bf9f5306561a10f68c9230229153dafa075e8b589e23858",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 1830.3774998188019,
+              "ttft99": 12298.767449989322,
+              "total99": 18893.718470129967,
+              "itlmax99": 9705.836670231827,
+              "queue99": 3665.229589986807,
+              "block99": 25.514979867935182,
+              "gw99": 3.1512099790573123
+            },
+            "per_backend": {
+              "b1": 6,
+              "b4": 17,
+              "b2": 14,
+              "b3": 15
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 2,
+              "b3": 2,
+              "b4": 2
+            },
+            "spill": 30.76923076923077,
+            "cache": 41.429261226460646,
+            "skew": 1.2893652102225885,
+            "prefill_by_backend": {
+              "b1": 42000,
+              "b2": 78200,
+              "b3": 62400,
+              "b4": 60000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-211212-C-loop-bounded125-z1.0-r0.3/run3.jsonl",
+          "sha256": "7277a7486dc11783cb1c8d3fa34815e850e99fe78d44353d18695240983217f4",
+          "backend_stats_sha256": "dd28ece646279e202d9fd4b5338ff414e2a6a57722f4f8158a4d465920e435ef",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3802.1280002593994,
+              "ttft99": 18597.795620021836,
+              "total99": 36424.50090002061,
+              "itlmax99": 12507.558880033495,
+              "queue99": 8897.466400308618,
+              "block99": 5837.165960102081,
+              "gw99": 4.1718406200408955
+            },
+            "per_backend": {
+              "b3": 14,
+              "b2": 17,
+              "b1": 11,
+              "b4": 17
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 4,
+              "b3": 3,
+              "b4": 3
+            },
+            "spill": 45.76271186440678,
+            "cache": 34.79992738031683,
+            "skew": 1.2386642148416285,
+            "prefill_by_backend": {
+              "b1": 62800,
+              "b2": 112323,
+              "b3": 86200,
+              "b4": 101400
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-212449-C-loop-bounded150-z1.0-r0.3",
+      "summary_sha256": "0c9171783b6ec7490dc3bdc5a3af9de49938f50b4033656afaa86b69192a1ff4",
+      "summary": "scenario C, engine loop, picker bounded:150, zipf 1.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3826    11852    15325      13856    27186        11625\nper backend: b1=3  b2=14  b3=24  b4=18\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       3470    10513    11924      10341    28229        10719\nper backend: b1=3  b2=16  b3=15  b4=18\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3802    10095    17748      10770    25722         8528\nper backend: b1=4  b2=17  b3=16  b4=22\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-212449-C-loop-bounded150-z1.0-r0.3/run1.jsonl",
+          "sha256": "bc4f15e28d8de2ec92ee9db5814b7305c57121afeba1f5b82068420042c655f3",
+          "backend_stats_sha256": "3bf9f2e5b29a4ab74701c9f79553c836bb832b2319104636d9c0e79691d58050",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3826.385000228882,
+              "ttft99": 15324.885600156787,
+              "total99": 27185.830919923785,
+              "itlmax99": 11624.713939971924,
+              "queue99": 12052.238300075533,
+              "block99": 5158.200359907163,
+              "gw99": 3.470380191802979
+            },
+            "per_backend": {
+              "b2": 14,
+              "b4": 18,
+              "b3": 24,
+              "b1": 3
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 4,
+              "b3": 5,
+              "b4": 4
+            },
+            "spill": 32.20338983050848,
+            "cache": 36.88669255206495,
+            "skew": 1.2371364653243848,
+            "prefill_by_backend": {
+              "b1": 55400,
+              "b2": 95400,
+              "b3": 110600,
+              "b4": 96200
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-212449-C-loop-bounded150-z1.0-r0.3/run2.jsonl",
+          "sha256": "81c54b561f627d1fd3f25936ebee6e86585e19caf9b03ced166026f3e2012683",
+          "backend_stats_sha256": "37808d79abcb732da97e115872bd8f8cf0e9b61efacb174272eb4cfe268be675",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 3470.0990002155304,
+              "ttft99": 11923.626599879266,
+              "total99": 28229.147919769293,
+              "itlmax99": 10719.186310076717,
+              "queue99": 6890.918050518041,
+              "block99": 4783.075619997982,
+              "gw99": 3.518950009346008
+            },
+            "per_backend": {
+              "b1": 3,
+              "b4": 18,
+              "b2": 16,
+              "b3": 15
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 5,
+              "b3": 3,
+              "b4": 3
+            },
+            "spill": 19.23076923076923,
+            "cache": 39.30468372766779,
+            "skew": 1.2760540970564838,
+            "prefill_by_backend": {
+              "b1": 33800,
+              "b2": 80200,
+              "b3": 71000,
+              "b4": 66400
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-212449-C-loop-bounded150-z1.0-r0.3/run3.jsonl",
+          "sha256": "63e92cdb08b901139e475719fe818a6cae9156705820061b0f22cc04b73dc4ed",
+          "backend_stats_sha256": "02672c79b292915f171bbc15b293eeb7b3bf4577522f7c31e597ecffe727a4f5",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3801.920000076294,
+              "ttft99": 17748.011539754873,
+              "total99": 25722.268800230035,
+              "itlmax99": 8527.740080118183,
+              "queue99": 11226.356419897082,
+              "block99": 4643.422339735034,
+              "gw99": 3.627379941940308
+            },
+            "per_backend": {
+              "b3": 16,
+              "b2": 17,
+              "b1": 4,
+              "b4": 22
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 4,
+              "b3": 3,
+              "b4": 4
+            },
+            "spill": 30.508474576271187,
+            "cache": 42.75760909424276,
+            "skew": 1.4349775784753362,
+            "prefill_by_backend": {
+              "b1": 29200,
+              "b2": 70800,
+              "b3": 112000,
+              "b4": 100200
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-213719-C-loop-bounded200-z1.0-r0.3",
+      "summary_sha256": "9cd5fea569c095367d9740129405deb39a724d983fd58ef3c6872db5c202046b",
+      "summary": "scenario C, engine loop, picker bounded:200, zipf 1.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3223     9889    19467       9660    28792         9758\nper backend: b1=1  b2=13  b3=25  b4=20\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       2539     7797    13445      10162    31316        11737\nper backend: b1=2  b2=19  b3=15  b4=16\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3825    22926    34963      16224    54437        11339\nper backend: b1=5  b2=18  b3=12  b4=24\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-213719-C-loop-bounded200-z1.0-r0.3/run1.jsonl",
+          "sha256": "04673d3f46bf756d1812b5e24896c3ad160e97b3b4be34b863f0a6b5caa49a97",
+          "backend_stats_sha256": "5a00147798c4a0d53b4a7e09410cd734a03e1f40094679aee44361ebea9cfee0",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3222.8219995498657,
+              "ttft99": 19467.35418015481,
+              "total99": 28791.529600162517,
+              "itlmax99": 9757.746979866028,
+              "queue99": 13858.777859869013,
+              "block99": 5471.302359685905,
+              "gw99": 3.7743005466461192
+            },
+            "per_backend": {
+              "b1": 1,
+              "b3": 25,
+              "b2": 13,
+              "b4": 20
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 5,
+              "b3": 3,
+              "b4": 5
+            },
+            "spill": 18.64406779661017,
+            "cache": 49.89969072038063,
+            "skew": 1.4226243327566057,
+            "prefill_by_backend": {
+              "b1": 20800,
+              "b2": 67200,
+              "b3": 101341,
+              "b4": 95600
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-213719-C-loop-bounded200-z1.0-r0.3/run2.jsonl",
+          "sha256": "8cfde7170665eff2db1a88c20cce65eeb12e03603859b5385513ae5d36bca8ca",
+          "backend_stats_sha256": "89167588f60cc446b87fcf76c2a5e43ff650ee4c966db1b0190a925fbb87d4d5",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 2539.265499830246,
+              "ttft99": 13445.177640223515,
+              "total99": 31315.80015974522,
+              "itlmax99": 11736.731209912301,
+              "queue99": 6117.167829732899,
+              "block99": 1829.981859641075,
+              "gw99": 4.065509986877445
+            },
+            "per_backend": {
+              "b1": 2,
+              "b4": 16,
+              "b2": 19,
+              "b3": 15
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 4,
+              "b3": 4,
+              "b4": 2
+            },
+            "spill": 15.384615384615385,
+            "cache": 44.61612747464993,
+            "skew": 1.3914559721011335,
+            "prefill_by_backend": {
+              "b1": 29400,
+              "b2": 66600,
+              "b3": 79800,
+              "b4": 53600
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-213719-C-loop-bounded200-z1.0-r0.3/run3.jsonl",
+          "sha256": "c94f3d2296122165c8375bf8b97fd4b3cc384b635b487a775983c262199c4950",
+          "backend_stats_sha256": "bee8871ea8557d5637f5e3b2b9cbc2add1821e8ba3e1e92d3b887c2da810e705",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3824.790999889374,
+              "ttft99": 34963.234079732894,
+              "total99": 54436.667599945074,
+              "itlmax99": 11339.068079986579,
+              "queue99": 30832.565300159462,
+              "block99": 8631.6396797905,
+              "gw99": 4.5652801227569615
+            },
+            "per_backend": {
+              "b3": 12,
+              "b2": 18,
+              "b1": 5,
+              "b4": 24
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 6,
+              "b3": 3,
+              "b4": 5
+            },
+            "spill": 27.11864406779661,
+            "cache": 39.24723797562746,
+            "skew": 1.2735436016549748,
+            "prefill_by_backend": {
+              "b1": 42200,
+              "b2": 107923,
+              "b3": 82000,
+              "b4": 108426
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261125-114929-C-loop-bounded-base-z0.0-r0.3",
+      "summary_sha256": "ba3b7b2061f721ef47e22b5c9416cc4a8fb2f2ee72d1484d22f5c7123a4074b9",
+      "summary": "scenario C, engine loop, picker bounded, zipf 0.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3, httpd /private/tmp/claude-501/-Users-yongmin-Desktop-web-server/f2df2aa3-2f3d-47e6-83dc-89db57f81e6b/scratchpad/base-build/httpd\n--- run 1\nrequests 1 (warmup excluded 4)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn     1     1    0    0       5791     5791     5791       9807     9807           28\nper backend: b1=1\n--- run 2\nrequests 1 (warmup excluded 5)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn     1     1    0    0       1823     1823     1823       5598     5598           20\nper backend: b2=1\n--- run 3\nrequests 1 (warmup excluded 14)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn     1     1    0    0       1823     1823     1823       5600     5600           21\nper backend: b2=1\n",
+      "runs": [
+        {
+          "source": "bench/results/20261125-114929-C-loop-bounded-base-z0.0-r0.3/run1.jsonl",
+          "sha256": "bee4d503ea3218615b1876ab216722f2c4a5dca30105871e9f7e69a310e0866c",
+          "backend_stats_sha256": "67911ee4080a170fd73ab9598000d944c2490b04d48491ca5b8baee0a900c866",
+          "statistics": {
+            "n": 1,
+            "err": 0,
+            "turn": {
+              "n": 1,
+              "ttft50": 5791.236999988556,
+              "ttft99": 5791.236999988556,
+              "total99": 9807.328000068665,
+              "itlmax99": 28.21400022506714,
+              "queue99": 9.895999908447266,
+              "block99": 18.882999897003174,
+              "gw99": 2.4580001831054688
+            },
+            "per_backend": {
+              "b1": 1
+            },
+            "peak_inflight": {
+              "b1": 1
+            },
+            "spill": 100.0,
+            "cache": 0.0,
+            "skew": 2.0240963855421685,
+            "prefill_by_backend": {
+              "b1": 8400,
+              "b2": 2000,
+              "b3": 0,
+              "b4": 6200
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-114929-C-loop-bounded-base-z0.0-r0.3/run2.jsonl",
+          "sha256": "44bd995cfd9673bd4a05ea13b3bd75c7b56099fd705c40639286bdbba5684eb7",
+          "backend_stats_sha256": "63f5a708a51c389b68db86be8930c762333a5a4708fc9b7c16cfaf4270723e2b",
+          "statistics": {
+            "n": 1,
+            "err": 0,
+            "turn": {
+              "n": 1,
+              "ttft50": 1822.8390002250671,
+              "ttft99": 1822.8390002250671,
+              "total99": 5597.526999950409,
+              "itlmax99": 19.658999919891357,
+              "queue99": 0.2330002784729004,
+              "block99": 19.1419997215271,
+              "gw99": 3.4640002250671387
+            },
+            "per_backend": {
+              "b2": 1
+            },
+            "peak_inflight": {
+              "b2": 1
+            },
+            "spill": 0.0,
+            "cache": 26.829268292682926,
+            "skew": 1.3333333333333333,
+            "prefill_by_backend": {
+              "b1": 2000,
+              "b2": 4000,
+              "b3": 2000,
+              "b4": 4000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-114929-C-loop-bounded-base-z0.0-r0.3/run3.jsonl",
+          "sha256": "c08d7ccbfd85ce3afcc692ff5493079a7fe9626825a086acfff965cd94301505",
+          "backend_stats_sha256": "3eff27b9007ceb0886040ccd459ad8f7ac1260c9985eb80c0e0c35598247e921",
+          "statistics": {
+            "n": 1,
+            "err": 0,
+            "turn": {
+              "n": 1,
+              "ttft50": 1823.3359999656677,
+              "ttft99": 1823.3359999656677,
+              "total99": 5599.8510003089905,
+              "itlmax99": 20.585999965667725,
+              "queue99": 0.2069997787475586,
+              "block99": 19.295000076293945,
+              "gw99": 3.8340001106262207
+            },
+            "per_backend": {
+              "b2": 1
+            },
+            "peak_inflight": {
+              "b2": 1
+            },
+            "spill": 0.0,
+            "cache": 18.48739495798319,
+            "skew": 1.4639175257731958,
+            "prefill_by_backend": {
+              "b1": 6200,
+              "b2": 10200,
+              "b3": 8200,
+              "b4": 14200
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261125-121616-C-loop-bounded-kv-z0.0-r0.3",
+      "summary_sha256": "b427058c7e1a252017d9d613d0a407cbbe34f185c7fdcdc2ed7e43fe49d92bcb",
+      "summary": "scenario C, engine loop, picker bounded, zipf 0.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3, httpd /Users/yongmin/Desktop/web-server/build/httpd\n--- run 1\nrequests 1 (warmup excluded 22)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn     1     1    0    0       1821     1821     1821       5593     5593           20\nper backend: b2=1\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       1830     5782    11723       8265    18623         5785\nper backend: b1=8  b2=12  b3=13  b4=19\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       1835     9187    18873       8340    28693         8284\nper backend: b1=14  b2=15  b3=13  b4=17\n",
+      "runs": [
+        {
+          "source": "bench/results/20261125-121616-C-loop-bounded-kv-z0.0-r0.3/run1.jsonl",
+          "sha256": "d964f591c3f6626c6036dd82e6818d689b473df3729e4d5946b52a55d50029e7",
+          "backend_stats_sha256": "f8dd09f7ee74d4d3d4166585555844665b641cac3cfeeba77f92b56fc1e54487",
+          "statistics": {
+            "n": 1,
+            "err": 0,
+            "turn": {
+              "n": 1,
+              "ttft50": 1820.8330006599426,
+              "ttft99": 1820.8330006599426,
+              "total99": 5592.675000667572,
+              "itlmax99": 19.625999927520752,
+              "queue99": 0.0989999771118164,
+              "block99": 19.21399974822998,
+              "gw99": 1.52000093460083
+            },
+            "per_backend": {
+              "b2": 1
+            },
+            "peak_inflight": {
+              "b2": 1
+            },
+            "spill": 0.0,
+            "cache": 35.9106529209622,
+            "skew": 1.5656836461126005,
+            "prefill_by_backend": {
+              "b1": 27200,
+              "b2": 8000,
+              "b3": 10200,
+              "b4": 29200
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-121616-C-loop-bounded-kv-z0.0-r0.3/run2.jsonl",
+          "sha256": "1370a7e3facfbe62a956fd4cfed54da5a3a571bc656d53fa390ef51e8382832b",
+          "backend_stats_sha256": "581dbc4514a664448bd2973a843c035ffbb0d1641f3586c13b8c8116af56bb35",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 1830.0884997844696,
+              "ttft99": 11722.52645017147,
+              "total99": 18622.67740991116,
+              "itlmax99": 5784.697009921074,
+              "queue99": 3628.512299690247,
+              "block99": 28.73560958862306,
+              "gw99": 3.198190398216248
+            },
+            "per_backend": {
+              "b3": 13,
+              "b4": 19,
+              "b2": 12,
+              "b1": 8
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 2,
+              "b3": 2,
+              "b4": 3
+            },
+            "spill": 23.076923076923077,
+            "cache": 51.23574144486692,
+            "skew": 1.4191033138401559,
+            "prefill_by_backend": {
+              "b1": 48400,
+              "b2": 47400,
+              "b3": 36600,
+              "b4": 72800
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-121616-C-loop-bounded-kv-z0.0-r0.3/run3.jsonl",
+          "sha256": "e37fa0d212a96c8fd39dd8711af1f75c2ae0455844fd9bea80d78d625950d51c",
+          "backend_stats_sha256": "92d4705483a603cff10af1ab05628b9b4b93176a68f31273e85813e920146f0b",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 1835.414999961853,
+              "ttft99": 18872.9553199482,
+              "total99": 28693.083880100254,
+              "itlmax99": 8284.152199497234,
+              "queue99": 11968.012899942405,
+              "block99": 31.949539890289305,
+              "gw99": 3.202200050354004
+            },
+            "per_backend": {
+              "b2": 15,
+              "b1": 14,
+              "b4": 17,
+              "b3": 13
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 3,
+              "b4": 3
+            },
+            "spill": 15.254237288135593,
+            "cache": 53.865979381443296,
+            "skew": 1.1779728651237031,
+            "prefill_by_backend": {
+              "b1": 73800,
+              "b2": 66200,
+              "b3": 40800,
+              "b4": 69800
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261125-123036-C-loop-bounded-base-z1.0-r0.3",
+      "summary_sha256": "3b68873fffcb5d106d3c87adb87999ccb31c6ad25bcf78e96b4d314b25b32108",
+      "summary": "scenario C, engine loop, picker bounded, zipf 1.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3, httpd /private/tmp/claude-501/-Users-yongmin-Desktop-web-server/f2df2aa3-2f3d-47e6-83dc-89db57f81e6b/scratchpad/base-build/httpd\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3224     9859    19469       9674    28799         9757\nper backend: b1=1  b2=13  b3=25  b4=20\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       2539     7796    13441      10168    31309        11738\nper backend: b1=2  b2=19  b3=15  b4=16\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3838    22923    34977      16224    54434        11339\nper backend: b1=5  b2=18  b3=12  b4=24\n",
+      "runs": [
+        {
+          "source": "bench/results/20261125-123036-C-loop-bounded-base-z1.0-r0.3/run1.jsonl",
+          "sha256": "2329e782b1ff68efb31764ed80d1bea61cd14007c74596f66c75c4a1c6ca8c0a",
+          "backend_stats_sha256": "5a00147798c4a0d53b4a7e09410cd734a03e1f40094679aee44361ebea9cfee0",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3223.6620001792908,
+              "ttft99": 19468.98877968789,
+              "total99": 28798.84041993142,
+              "itlmax99": 9756.82704003334,
+              "queue99": 13861.247419948588,
+              "block99": 5471.009300041205,
+              "gw99": 5.076219625473027
+            },
+            "per_backend": {
+              "b1": 1,
+              "b3": 25,
+              "b2": 13,
+              "b4": 20
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 5,
+              "b3": 3,
+              "b4": 5
+            },
+            "spill": 18.64406779661017,
+            "cache": 49.89969072038063,
+            "skew": 1.4226243327566057,
+            "prefill_by_backend": {
+              "b1": 20800,
+              "b2": 67200,
+              "b3": 101341,
+              "b4": 95600
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-123036-C-loop-bounded-base-z1.0-r0.3/run2.jsonl",
+          "sha256": "3b01f46c3eb2e6eb7c05376c11b5d0183f9231a37e11ca7cec00fc38328afd80",
+          "backend_stats_sha256": "89167588f60cc446b87fcf76c2a5e43ff650ee4c966db1b0190a925fbb87d4d5",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 2539.3470001220703,
+              "ttft99": 13441.40630994321,
+              "total99": 31309.30963998318,
+              "itlmax99": 11738.085519962311,
+              "queue99": 6128.424599766736,
+              "block99": 1831.9077397489548,
+              "gw99": 5.058579487800605
+            },
+            "per_backend": {
+              "b1": 2,
+              "b4": 16,
+              "b2": 19,
+              "b3": 15
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 4,
+              "b3": 4,
+              "b4": 2
+            },
+            "spill": 15.384615384615385,
+            "cache": 44.61612747464993,
+            "skew": 1.3914559721011335,
+            "prefill_by_backend": {
+              "b1": 29400,
+              "b2": 66600,
+              "b3": 79800,
+              "b4": 53600
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-123036-C-loop-bounded-base-z1.0-r0.3/run3.jsonl",
+          "sha256": "5d1a120b691e5ea35f7e297d00354bad90f4c94b6ee2dbeab4c5e021fe5db5c8",
+          "backend_stats_sha256": "bee8871ea8557d5637f5e3b2b9cbc2add1821e8ba3e1e92d3b887c2da810e705",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3837.949999809265,
+              "ttft99": 34976.96743991852,
+              "total99": 54434.307440013894,
+              "itlmax99": 11339.206599731451,
+              "queue99": 30845.040939559945,
+              "block99": 8632.70533972359,
+              "gw99": 3.939239854812622
+            },
+            "per_backend": {
+              "b3": 12,
+              "b2": 18,
+              "b1": 5,
+              "b4": 24
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 6,
+              "b3": 3,
+              "b4": 5
+            },
+            "spill": 27.11864406779661,
+            "cache": 39.24723797562746,
+            "skew": 1.2735436016549748,
+            "prefill_by_backend": {
+              "b1": 42200,
+              "b2": 107923,
+              "b3": 82000,
+              "b4": 108426
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261125-124327-C-loop-bounded-kv-z1.0-r0.3",
+      "summary_sha256": "7480ba8f03dedf72a4ace1382e6308813be57720e1b477cd5a6cd015b2e5b30a",
+      "summary": "scenario C, engine loop, picker bounded, zipf 1.0, rate 0.3/s, duration 240.0s, backends 4, seed 1..3, httpd /Users/yongmin/Desktop/web-server/build/httpd\n--- run 1\nrequests 59 (warmup excluded 23)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3049    10490    17975       9713    24102        12488\nper backend: b2=15  b3=24  b4=20\n--- run 2\nrequests 52 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    52    52    0    0       2538     7785    13428      10169    31328        11738\nper backend: b1=2  b2=19  b3=15  b4=16\n--- run 3\nrequests 59 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    turn    59    59    0    0       3836    21658    29605      15553    44728        12488\nper backend: b1=5  b2=18  b3=12  b4=24\n",
+      "runs": [
+        {
+          "source": "bench/results/20261125-124327-C-loop-bounded-kv-z1.0-r0.3/run1.jsonl",
+          "sha256": "10086f2cf221f3643494db5ec6953e9801f6c62f1038d01fd4f4acb18da97590",
+          "backend_stats_sha256": "3c19995ceb74d3f4d09dd36ea33cc95c5dd2709d097e9f3e9d3fa5f9afe7bd6a",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3049.302999973297,
+              "ttft99": 17975.13426020623,
+              "total99": 24102.002899990082,
+              "itlmax99": 12487.98622016907,
+              "queue99": 13730.250819988263,
+              "block99": 6623.345819950107,
+              "gw99": 3.6060801887512226
+            },
+            "per_backend": {
+              "b2": 15,
+              "b3": 24,
+              "b4": 20
+            },
+            "peak_inflight": {
+              "b2": 4,
+              "b3": 3,
+              "b4": 4
+            },
+            "spill": 16.949152542372882,
+            "cache": 47.578774872921066,
+            "skew": 1.3918380900312268,
+            "prefill_by_backend": {
+              "b1": 18800,
+              "b2": 84400,
+              "b3": 103741,
+              "b4": 91200
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-124327-C-loop-bounded-kv-z1.0-r0.3/run2.jsonl",
+          "sha256": "6521ac71532dcf0629f2167d372f240d922338181491aa0a6f6a25ee91d41279",
+          "backend_stats_sha256": "89167588f60cc446b87fcf76c2a5e43ff650ee4c966db1b0190a925fbb87d4d5",
+          "statistics": {
+            "n": 52,
+            "err": 0,
+            "turn": {
+              "n": 52,
+              "ttft50": 2537.7400000095367,
+              "ttft99": 13427.70382988454,
+              "total99": 31327.928970022203,
+              "itlmax99": 11738.133320069313,
+              "queue99": 6111.685209999089,
+              "block99": 1831.905309934616,
+              "gw99": 3.76569992542267
+            },
+            "per_backend": {
+              "b1": 2,
+              "b4": 16,
+              "b2": 19,
+              "b3": 15
+            },
+            "peak_inflight": {
+              "b1": 1,
+              "b2": 4,
+              "b3": 4,
+              "b4": 2
+            },
+            "spill": 15.384615384615385,
+            "cache": 44.61612747464993,
+            "skew": 1.3914559721011335,
+            "prefill_by_backend": {
+              "b1": 29400,
+              "b2": 66600,
+              "b3": 79800,
+              "b4": 53600
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261125-124327-C-loop-bounded-kv-z1.0-r0.3/run3.jsonl",
+          "sha256": "c0cbef8aa4292d0322e4373cb30f0b070e02e7437d43c8c65f26aefb09ef8ccc",
+          "backend_stats_sha256": "d3937d300aa36d16945d7f984e27e74ae6bfc01c650e1b71770505a1f176ae1c",
+          "statistics": {
+            "n": 59,
+            "err": 0,
+            "turn": {
+              "n": 59,
+              "ttft50": 3836.4519996643066,
+              "ttft99": 29605.415639944076,
+              "total99": 44728.28627985001,
+              "itlmax99": 12488.286879711155,
+              "queue99": 24371.049500093464,
+              "block99": 5251.575000110639,
+              "gw99": 4.033459854125977
+            },
+            "per_backend": {
+              "b3": 12,
+              "b2": 18,
+              "b1": 5,
+              "b4": 24
+            },
+            "peak_inflight": {
+              "b1": 2,
+              "b2": 6,
+              "b3": 3,
+              "b4": 6
+            },
+            "spill": 27.11864406779661,
+            "cache": 40.03218273514001,
+            "skew": 1.3949290344460343,
+            "prefill_by_backend": {
+              "b1": 42200,
+              "b2": 94723,
+              "b3": 82000,
+              "b4": 117226
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-155701-A-loop-r1.3",
+      "summary_sha256": "754b01909f98f27af8578b63dd75b8b3e83f743b605b401580b314dca219b9cd",
+      "summary": "scenario A, engine loop, rate 1.3/s, duration 120.0s, backends 4, seed 1..3\n--- run 1\nrequests 136 (warmup excluded 14)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   136   136    0    0        471      492      507       2294     4460          487\nper backend: b1=34  b2=34  b3=34  b4=34\n--- run 2\nrequests 144 (warmup excluded 9)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   144   144    0    0        471      493      706       2449     4292          486\nper backend: b1=36  b2=36  b3=36  b4=36\n--- run 3\nrequests 143 (warmup excluded 10)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   143   143    0    0        471      491      496       2273     3409          479\nper backend: b1=36  b2=35  b3=36  b4=36\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-155701-A-loop-r1.3/run1.jsonl",
+          "sha256": "15fa66ff9e1df15a9189d52f168a4f9c208b4c79eccac19bf41fcde176f73597",
+          "statistics": {
+            "n": 136,
+            "err": 0,
+            "short": {
+              "n": 136,
+              "ttft50": 470.8145000934601,
+              "ttft99": 506.88005023002626,
+              "total99": 4459.90599975586,
+              "itlmax99": 486.9724499225616,
+              "queue99": 21.318100118637105,
+              "block99": 34.49699976444248,
+              "gw99": 3.23680009841919
+            },
+            "per_backend": {
+              "b3": 34,
+              "b1": 34,
+              "b2": 34,
+              "b4": 34
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 4,
+              "b3": 3,
+              "b4": 4
+            },
+            "cache": 0.0,
+            "skew": 1.0133333333333334,
+            "prefill_by_backend": {
+              "b1": 19000,
+              "b2": 19000,
+              "b3": 18500,
+              "b4": 18500
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-155701-A-loop-r1.3/run2.jsonl",
+          "sha256": "3c82286157b0c56ae11d77b00b5bcf3d963534ebe6b93c122b2863965b187e80",
+          "statistics": {
+            "n": 144,
+            "err": 0,
+            "short": {
+              "n": 144,
+              "ttft50": 471.07400012016296,
+              "ttft99": 706.0458001995087,
+              "total99": 4292.18296034336,
+              "itlmax99": 486.4542698383331,
+              "queue99": 225.13719974517818,
+              "block99": 31.71452009677886,
+              "gw99": 5.193019881248468
+            },
+            "per_backend": {
+              "b3": 36,
+              "b2": 36,
+              "b4": 36,
+              "b1": 36
+            },
+            "peak_inflight": {
+              "b1": 4,
+              "b2": 3,
+              "b3": 3,
+              "b4": 3
+            },
+            "cache": 0.0,
+            "skew": 1.0196078431372548,
+            "prefill_by_backend": {
+              "b1": 19500,
+              "b2": 19000,
+              "b3": 19000,
+              "b4": 19000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-155701-A-loop-r1.3/run3.jsonl",
+          "sha256": "c145b8a0bfd31ec66f2ba0faf269e1452947f5b426db8c6ded50d67c29738913",
+          "statistics": {
+            "n": 143,
+            "err": 0,
+            "short": {
+              "n": 143,
+              "ttft50": 470.8659996986389,
+              "ttft99": 495.5291799926758,
+              "total99": 3409.1904002285014,
+              "itlmax99": 478.8289000320435,
+              "queue99": 17.828800163269047,
+              "block99": 24.611119956970217,
+              "gw99": 3.8733798313140975
+            },
+            "per_backend": {
+              "b3": 36,
+              "b4": 36,
+              "b1": 36,
+              "b2": 35
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 2,
+              "b4": 2
+            },
+            "cache": 0.0,
+            "skew": 1.0196078431372548,
+            "prefill_by_backend": {
+              "b1": 19500,
+              "b2": 19000,
+              "b3": 19000,
+              "b4": 19000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-160311-A-loop-r2.1",
+      "summary_sha256": "4b9874b368c2347bb8f0a76057b49e76335c7dee8f1f2d908ebf45c0a78acd60",
+      "summary": "scenario A, engine loop, rate 2.1/s, duration 120.0s, backends 4, seed 1..3\n--- run 1\nrequests 220 (warmup excluded 20)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   220   220    0    0        488      508     2456       3309     7397          487\nper backend: b1=55  b2=55  b3=55  b4=55\n--- run 2\nrequests 231 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   231   231    0    0        489      516      856       3423     5385          488\nper backend: b1=58  b2=58  b3=57  b4=58\n--- run 3\nrequests 240 (warmup excluded 18)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   240   240    0    0        490      506      550       3523     5272          487\nper backend: b1=60  b2=60  b3=60  b4=60\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-160311-A-loop-r2.1/run1.jsonl",
+          "sha256": "5e2a521235fb99b50691a29150a898fe0765aff57e4efa37fd90209cd054d620",
+          "statistics": {
+            "n": 220,
+            "err": 0,
+            "short": {
+              "n": 220,
+              "ttft50": 487.8899998664856,
+              "ttft99": 2456.468749823571,
+              "total99": 7397.34348959446,
+              "itlmax99": 487.4764800930023,
+              "queue99": 1966.5989298820505,
+              "block99": 37.129430155754086,
+              "gw99": 3.3124297666549682
+            },
+            "per_backend": {
+              "b1": 55,
+              "b2": 55,
+              "b3": 55,
+              "b4": 55
+            },
+            "peak_inflight": {
+              "b1": 6,
+              "b2": 6,
+              "b3": 6,
+              "b4": 6
+            },
+            "cache": 0.0,
+            "skew": 1.0,
+            "prefill_by_backend": {
+              "b1": 30000,
+              "b2": 30000,
+              "b3": 30000,
+              "b4": 30000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-160311-A-loop-r2.1/run2.jsonl",
+          "sha256": "c1d5cdd5ccaf021867c69dd4dd57a22c4780ceb27302937559393d615faf95eb",
+          "statistics": {
+            "n": 231,
+            "err": 0,
+            "short": {
+              "n": 231,
+              "ttft50": 488.6019997596741,
+              "ttft99": 856.3551999092099,
+              "total99": 5385.366700315475,
+              "itlmax99": 488.175200176239,
+              "queue99": 366.96160016059844,
+              "block99": 37.17499961853027,
+              "gw99": 3.7856995582580546
+            },
+            "per_backend": {
+              "b4": 58,
+              "b1": 58,
+              "b2": 58,
+              "b3": 57
+            },
+            "peak_inflight": {
+              "b1": 5,
+              "b2": 5,
+              "b3": 5,
+              "b4": 5
+            },
+            "cache": 0.0,
+            "skew": 1.008,
+            "prefill_by_backend": {
+              "b1": 31500,
+              "b2": 31500,
+              "b3": 31000,
+              "b4": 31000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-160311-A-loop-r2.1/run3.jsonl",
+          "sha256": "198a8d81f7ebb64ef10426878ce76cf54e59c09f6c1e6ff7f942e876c454bf34",
+          "statistics": {
+            "n": 240,
+            "err": 0,
+            "short": {
+              "n": 240,
+              "ttft50": 490.26349997520447,
+              "ttft99": 549.9224101114266,
+              "total99": 5271.949039926528,
+              "itlmax99": 487.4937902879715,
+              "queue99": 60.117479996680515,
+              "block99": 37.14560993671417,
+              "gw99": 3.7386298370361315
+            },
+            "per_backend": {
+              "b3": 60,
+              "b4": 60,
+              "b1": 60,
+              "b2": 60
+            },
+            "peak_inflight": {
+              "b1": 4,
+              "b2": 5,
+              "b3": 5,
+              "b4": 5
+            },
+            "cache": 0.0,
+            "skew": 1.0077519379844961,
+            "prefill_by_backend": {
+              "b1": 32500,
+              "b2": 32500,
+              "b3": 32000,
+              "b4": 32000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-160923-A-loop-r3.9",
+      "summary_sha256": "7adff4100f1da0efce5581757371a0f90e32fc20329f14f9bc0f35573a057d4d",
+      "summary": "scenario A, engine loop, rate 3.9/s, duration 120.0s, backends 4, seed 1..3\n--- run 1\nrequests 410 (warmup excluded 37)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   410   410    0    0      16745    32289    33684      21764    38699          488\nper backend: b1=102  b2=103  b3=103  b4=102\n--- run 2\nrequests 420 (warmup excluded 34)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   420   420    0    0      20340    34230    36054      25358    40341          488\nper backend: b1=105  b2=105  b3=105  b4=105\n--- run 3\nrequests 437 (warmup excluded 30)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n   short   437   437    0    0      22181    36609    39958      27197    43787          487\nper backend: b1=109  b2=109  b3=110  b4=109\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-160923-A-loop-r3.9/run1.jsonl",
+          "sha256": "20d2c8562cdb8e9a93fdf9bc9646e7e68afcbdf1fc5b086c48e952b31e9a5402",
+          "statistics": {
+            "n": 410,
+            "err": 0,
+            "short": {
+              "n": 410,
+              "ttft50": 16745.108500003815,
+              "ttft99": 33684.179049854276,
+              "total99": 38698.54102013111,
+              "itlmax99": 487.68647974967956,
+              "queue99": 33194.513610219954,
+              "block99": 37.21173030376434,
+              "gw99": 4.205369896888732
+            },
+            "per_backend": {
+              "b2": 103,
+              "b4": 102,
+              "b3": 103,
+              "b1": 102
+            },
+            "peak_inflight": {
+              "b1": 29,
+              "b2": 29,
+              "b3": 29,
+              "b4": 29
+            },
+            "cache": 0.0,
+            "skew": 1.0022371364653244,
+            "prefill_by_backend": {
+              "b1": 56000,
+              "b2": 56000,
+              "b3": 56000,
+              "b4": 55500
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-160923-A-loop-r3.9/run2.jsonl",
+          "sha256": "bfdc3d8e15d725d7a11f86b5083a66c9e5a0643fef9b96ec431c00a482c98fee",
+          "statistics": {
+            "n": 420,
+            "err": 0,
+            "short": {
+              "n": 420,
+              "ttft50": 20339.75049972534,
+              "ttft99": 36053.52658064365,
+              "total99": 40340.916549782756,
+              "itlmax99": 487.71205961704254,
+              "queue99": 35562.92655004025,
+              "block99": 37.22699975967407,
+              "gw99": 4.778340344429017
+            },
+            "per_backend": {
+              "b3": 105,
+              "b4": 105,
+              "b1": 105,
+              "b2": 105
+            },
+            "peak_inflight": {
+              "b1": 31,
+              "b2": 31,
+              "b3": 31,
+              "b4": 31
+            },
+            "cache": 0.0,
+            "skew": 1.0044052863436124,
+            "prefill_by_backend": {
+              "b1": 57000,
+              "b2": 57000,
+              "b3": 56500,
+              "b4": 56500
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-160923-A-loop-r3.9/run3.jsonl",
+          "sha256": "2134a7b0a76ca6b271b0e3d8b26efab7044c627be2f291918e1238b6867470a1",
+          "statistics": {
+            "n": 437,
+            "err": 0,
+            "short": {
+              "n": 437,
+              "ttft50": 22181.363999843597,
+              "ttft99": 39958.26091968536,
+              "total99": 43786.786480064395,
+              "itlmax99": 487.19184009552004,
+              "queue99": 39469.17108005523,
+              "block99": 37.197119846343995,
+              "gw99": 4.029360046386716
+            },
+            "per_backend": {
+              "b3": 110,
+              "b4": 109,
+              "b1": 109,
+              "b2": 109
+            },
+            "peak_inflight": {
+              "b1": 33,
+              "b2": 33,
+              "b3": 33,
+              "b4": 33
+            },
+            "cache": 0.0,
+            "skew": 1.0021413276231264,
+            "prefill_by_backend": {
+              "b1": 58500,
+              "b2": 58500,
+              "b3": 58500,
+              "b4": 58000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-161722-B-loop-r0.7",
+      "summary_sha256": "59d00ba062a01e39132f509d2a8892e1001ccc25ee4fe32f6a1824d05726681d",
+      "summary": "scenario B, engine loop, rate 0.7/s, duration 120.0s, backends 4, seed 1..3\n--- run 1\nrequests 84 (warmup excluded 7)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long     5     5    0    0       4521     4529     4534      15189    20560         4363\n   short    79    79    0    0        471      487      622       2264     3535          476\nper backend: b1=21  b2=21  b3=21  b4=21\n--- run 2\nrequests 76 (warmup excluded 4)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long    10    10    0    0       4521     4540     4544      15703    26456         4530\n   short    66    66    0    0        471      493     1123       2267     7355         4524\nper backend: b1=19  b2=19  b3=19  b4=19\n--- run 3\nrequests 74 (warmup excluded 5)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long    11    11    0    0       4521     4534     4542      16791    21974         4525\n   short    63    63    0    0        471      494     1893       2264     4677          206\nper backend: b1=18  b2=19  b3=19  b4=18\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-161722-B-loop-r0.7/run1.jsonl",
+          "sha256": "8e7f4059ee56e31683af4c6ffcbb6657990e3501b170f9b00ef00c6077994bc0",
+          "statistics": {
+            "n": 84,
+            "err": 0,
+            "long": {
+              "n": 5,
+              "ttft50": 4521.002000331879,
+              "ttft99": 4534.074440040588,
+              "total99": 20560.46855983734,
+              "itlmax99": 4362.757080287933,
+              "queue99": 8.108200588226318,
+              "block99": 24.178959579467772,
+              "gw99": 2.66535982131958
+            },
+            "short": {
+              "n": 79,
+              "ttft50": 470.6749997138977,
+              "ttft99": 622.1194602775568,
+              "total99": 3534.887679824829,
+              "itlmax99": 476.03543966293336,
+              "queue99": 144.2461802387231,
+              "block99": 25.853739748001093,
+              "gw99": 8.59119993209837
+            },
+            "per_backend": {
+              "b4": 21,
+              "b2": 21,
+              "b3": 21,
+              "b1": 21
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 2,
+              "b3": 2,
+              "b4": 2
+            },
+            "cache": 0.0,
+            "skew": 1.4411764705882353,
+            "prefill_by_backend": {
+              "b1": 16000,
+              "b2": 11500,
+              "b3": 16000,
+              "b4": 24500
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-161722-B-loop-r0.7/run2.jsonl",
+          "sha256": "85c4f50c348ca737d2caaf50b29b854e75e408f2a30b8f30b36918d9b49b35e9",
+          "statistics": {
+            "n": 76,
+            "err": 0,
+            "long": {
+              "n": 10,
+              "ttft50": 4521.221499919891,
+              "ttft99": 4544.26389026165,
+              "total99": 26456.099949903488,
+              "itlmax99": 4529.877130022049,
+              "queue99": 16.689050030708316,
+              "block99": 29.302170338630678,
+              "gw99": 3.8291603088378907
+            },
+            "short": {
+              "n": 66,
+              "ttft50": 470.896999835968,
+              "ttft99": 1122.8342001914878,
+              "total99": 7354.892250108714,
+              "itlmax99": 4524.36284980774,
+              "queue99": 643.1807497739692,
+              "block99": 32.712700152397126,
+              "gw99": 5.160749864578246
+            },
+            "per_backend": {
+              "b1": 19,
+              "b2": 19,
+              "b3": 19,
+              "b4": 19
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 4,
+              "b3": 2,
+              "b4": 3
+            },
+            "cache": 0.0,
+            "skew": 1.2513966480446927,
+            "prefill_by_backend": {
+              "b1": 23500,
+              "b2": 23500,
+              "b3": 14500,
+              "b4": 28000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-161722-B-loop-r0.7/run3.jsonl",
+          "sha256": "51992c9eca06c1afba07a1dbf5f6b0b701d8f43c74934519d3a05940750f4db8",
+          "statistics": {
+            "n": 74,
+            "err": 0,
+            "long": {
+              "n": 11,
+              "ttft50": 4520.867000102997,
+              "ttft99": 4542.039600372314,
+              "total99": 21974.43869996071,
+              "itlmax99": 4524.847099971771,
+              "queue99": 15.066499805450443,
+              "block99": 24.56289949417114,
+              "gw99": 3.2593002319335938
+            },
+            "short": {
+              "n": 63,
+              "ttft50": 471.0079998970032,
+              "ttft99": 1893.1213798141484,
+              "total99": 4676.828920030594,
+              "itlmax99": 205.90579997062795,
+              "queue99": 1416.6483998489384,
+              "block99": 30.836299896240234,
+              "gw99": 3.272479810714722
+            },
+            "per_backend": {
+              "b2": 19,
+              "b3": 19,
+              "b4": 18,
+              "b1": 18
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 2,
+              "b4": 2
+            },
+            "cache": 0.0,
+            "skew": 1.2584269662921348,
+            "prefill_by_backend": {
+              "b1": 28000,
+              "b2": 28000,
+              "b3": 14500,
+              "b4": 18500
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-162354-B-loop-r1.1",
+      "summary_sha256": "1844b15d7625295881f47b1141f7572d265ec29f9d926d3699b479ea54f0a23b",
+      "summary": "scenario B, engine loop, rate 1.1/s, duration 120.0s, backends 4, seed 1..3\n--- run 1\nrequests 122 (warmup excluded 11)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long     7     7    0    0       4521     4554     4563      18333    33754         4537\n   short   115   115    0    0        471      499     2972       2596    12283         4536\nper backend: b1=31  b2=30  b3=30  b4=31\n--- run 2\nrequests 126 (warmup excluded 8)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long    15    15    0    0       4537     4804     5158      19362    32054         4536\n   short   111   111    0    0        488     1148     3186       2979     9092         4537\nper backend: b1=32  b2=32  b3=31  b4=31\n--- run 3\nrequests 117 (warmup excluded 8)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long    15    15    0    0       4529     4546     4830      19206    31302         4537\n   short   102   102    0    0        480      798     4095       2762     9340         4531\nper backend: b1=30  b2=29  b3=29  b4=29\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-162354-B-loop-r1.1/run1.jsonl",
+          "sha256": "9a0e2f8b288b781b2edb82c66d935fe10d2b9d3a29765bbddf51c772598fb3fc",
+          "statistics": {
+            "n": 122,
+            "err": 0,
+            "long": {
+              "n": 7,
+              "ttft50": 4520.8330001831055,
+              "ttft99": 4562.525439786911,
+              "total99": 33754.026839723585,
+              "itlmax99": 4537.360700073242,
+              "queue99": 22.90024047851562,
+              "block99": 37.123940048217776,
+              "gw99": 2.8933996391296386
+            },
+            "short": {
+              "n": 115,
+              "ttft50": 471.23400020599365,
+              "ttft99": 2972.2409397792817,
+              "total99": 12282.911400232313,
+              "itlmax99": 4536.454440259933,
+              "queue99": 2484.2872396850585,
+              "block99": 37.1181000995636,
+              "gw99": 4.159839878082275
+            },
+            "per_backend": {
+              "b3": 30,
+              "b4": 31,
+              "b2": 30,
+              "b1": 31
+            },
+            "peak_inflight": {
+              "b1": 3,
+              "b2": 3,
+              "b3": 3,
+              "b4": 6
+            },
+            "cache": 0.0,
+            "skew": 1.3463414634146342,
+            "prefill_by_backend": {
+              "b1": 26000,
+              "b2": 21000,
+              "b3": 21000,
+              "b4": 34500
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-162354-B-loop-r1.1/run2.jsonl",
+          "sha256": "52446ac09b6422538d6d16b5821f04702716827a75ccd9206c6d71de85874ee3",
+          "statistics": {
+            "n": 126,
+            "err": 0,
+            "long": {
+              "n": 15,
+              "ttft50": 4536.986999988556,
+              "ttft99": 5157.8889599132535,
+              "total99": 32053.827980070113,
+              "itlmax99": 4536.380540399551,
+              "queue99": 623.9520602512358,
+              "block99": 37.10457998275757,
+              "gw99": 2.9082201385498045
+            },
+            "short": {
+              "n": 111,
+              "ttft50": 488.02299976348877,
+              "ttft99": 3185.7680995941205,
+              "total99": 9092.043700551987,
+              "itlmax99": 4536.9688998699185,
+              "queue99": 2482.2927999973326,
+              "block99": 442.12179994583386,
+              "gw99": 3.2699007511138922
+            },
+            "per_backend": {
+              "b3": 31,
+              "b2": 32,
+              "b4": 31,
+              "b1": 32
+            },
+            "peak_inflight": {
+              "b1": 5,
+              "b2": 6,
+              "b3": 4,
+              "b4": 5
+            },
+            "cache": 0.0,
+            "skew": 1.1010452961672474,
+            "prefill_by_backend": {
+              "b1": 39500,
+              "b2": 39500,
+              "b3": 25500,
+              "b4": 39000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-162354-B-loop-r1.1/run3.jsonl",
+          "sha256": "9e004ae62908b2e9ddbd3a5e5491c07b530c635883cc3b591e3159c381ffb715",
+          "statistics": {
+            "n": 117,
+            "err": 0,
+            "long": {
+              "n": 15,
+              "ttft50": 4528.630000114441,
+              "ttft99": 4829.625260229111,
+              "total99": 31302.103520240784,
+              "itlmax99": 4536.579000301361,
+              "queue99": 291.88872011184674,
+              "block99": 36.19556001663208,
+              "gw99": 3.0199202632904054
+            },
+            "short": {
+              "n": 102,
+              "ttft50": 479.81699991226196,
+              "ttft99": 4095.253259978293,
+              "total99": 9340.412200164788,
+              "itlmax99": 4530.6493001794815,
+              "queue99": 3605.4886701869955,
+              "block99": 37.14890969753265,
+              "gw99": 4.773440389633174
+            },
+            "per_backend": {
+              "b1": 30,
+              "b2": 29,
+              "b3": 29,
+              "b4": 29
+            },
+            "peak_inflight": {
+              "b1": 5,
+              "b2": 6,
+              "b3": 2,
+              "b4": 3
+            },
+            "cache": 0.0,
+            "skew": 1.323076923076923,
+            "prefill_by_backend": {
+              "b1": 43000,
+              "b2": 38000,
+              "b3": 24500,
+              "b4": 24500
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-163021-B-loop-r2.1",
+      "summary_sha256": "8fa38ebcefab058f7cd923d6d948d26481f2bcd5e6179ac732026239075e9686",
+      "summary": "scenario B, engine loop, rate 2.1/s, duration 120.0s, backends 4, seed 1..3\n--- run 1\nrequests 220 (warmup excluded 20)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long    18    18    0    0       9717    23858    27685      38178    54769         4538\n   short   202   202    0    0        550    18335    27638       5458    31349         4537\nper backend: b1=55  b2=55  b3=55  b4=55\n--- run 2\nrequests 231 (warmup excluded 19)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long    23    23    0    0      14346    25377    26673      42294    52627         4987\n   short   208   208    0    0      12919    22822    29107      18713    33246         4986\nper backend: b1=58  b2=58  b3=57  b4=58\n--- run 3\nrequests 240 (warmup excluded 18)  dropped 0\n   class     n    ok  err  5xx   ttft p50      p90      p99  total p50      p99  itl_max p99\n    long    18    18    0    0       7682    23381    30064      33996    55149         4912\n   short   222   222    0    0      10480    27621    30666      14588    35723         4538\nper backend: b1=60  b2=60  b3=60  b4=60\n",
+      "runs": [
+        {
+          "source": "bench/results/20261124-163021-B-loop-r2.1/run1.jsonl",
+          "sha256": "1a39a4b37c5b34d20155807ba98fbb5d94708d807525f06a12b9e517e61a249b",
+          "statistics": {
+            "n": 220,
+            "err": 0,
+            "long": {
+              "n": 18,
+              "ttft50": 9717.083000183105,
+              "ttft99": 27684.513919434543,
+              "total99": 54768.53928014278,
+              "itlmax99": 4537.501299562454,
+              "queue99": 23144.206430048936,
+              "block99": 37.23131014823914,
+              "gw99": 3.901029224395751
+            },
+            "short": {
+              "n": 202,
+              "ttft50": 550.162999868393,
+              "ttft99": 27637.779000706716,
+              "total99": 31348.85009056092,
+              "itlmax99": 4537.200950212478,
+              "queue99": 27146.69531001572,
+              "block99": 37.20292006969452,
+              "gw99": 3.9295497608184826
+            },
+            "per_backend": {
+              "b2": 55,
+              "b3": 55,
+              "b4": 55,
+              "b1": 55
+            },
+            "peak_inflight": {
+              "b1": 11,
+              "b2": 6,
+              "b3": 8,
+              "b4": 15
+            },
+            "cache": 0.0,
+            "skew": 1.3722627737226278,
+            "prefill_by_backend": {
+              "b1": 57000,
+              "b2": 43500,
+              "b3": 34500,
+              "b4": 70500
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-163021-B-loop-r2.1/run2.jsonl",
+          "sha256": "49ab2c54b46429ac92aeb3d6c6dad24dec2f4695e6cb1b93e2eba629827d5f06",
+          "statistics": {
+            "n": 231,
+            "err": 0,
+            "long": {
+              "n": 23,
+              "ttft50": 14345.647000312805,
+              "ttft99": 26672.52754032135,
+              "total99": 52627.05282036782,
+              "itlmax99": 4987.154339885712,
+              "queue99": 21959.160299892425,
+              "block99": 487.1438998031616,
+              "gw99": 4.124520044326783
+            },
+            "short": {
+              "n": 208,
+              "ttft50": 12918.608500003815,
+              "ttft99": 29106.91414972306,
+              "total99": 33246.36815969468,
+              "itlmax99": 4985.732110571861,
+              "queue99": 28616.95363016129,
+              "block99": 4537.0230899429325,
+              "gw99": 4.304429988861085
+            },
+            "per_backend": {
+              "b3": 57,
+              "b1": 58,
+              "b4": 58,
+              "b2": 58
+            },
+            "peak_inflight": {
+              "b1": 14,
+              "b2": 16,
+              "b3": 10,
+              "b4": 15
+            },
+            "cache": 0.0,
+            "skew": 1.115702479338843,
+            "prefill_by_backend": {
+              "b1": 58500,
+              "b2": 67500,
+              "b3": 49000,
+              "b4": 67000
+            }
+          }
+        },
+        {
+          "source": "bench/results/20261124-163021-B-loop-r2.1/run3.jsonl",
+          "sha256": "f10c72f9fd31490a6081d293a6f1e3273a165dd7724c668a33ac88db7d990fa6",
+          "statistics": {
+            "n": 240,
+            "err": 0,
+            "long": {
+              "n": 18,
+              "ttft50": 7682.216500043869,
+              "ttft99": 30063.864910225857,
+              "total99": 55149.00372039317,
+              "itlmax99": 4911.814889917373,
+              "queue99": 25522.489029841414,
+              "block99": 411.6064699125282,
+              "gw99": 3.7118995285034178
+            },
+            "short": {
+              "n": 222,
+              "ttft50": 10479.673000097275,
+              "ttft99": 30666.432450022698,
+              "total99": 35723.375440177915,
+              "itlmax99": 4537.922860221863,
+              "queue99": 30174.89741002083,
+              "block99": 487.94466975212094,
+              "gw99": 4.11133011341095
+            },
+            "per_backend": {
+              "b3": 60,
+              "b4": 60,
+              "b2": 60,
+              "b1": 60
+            },
+            "peak_inflight": {
+              "b1": 23,
+              "b2": 17,
+              "b3": 7,
+              "b4": 12
+            },
+            "cache": 0.0,
+            "skew": 1.1689497716894977,
+            "prefill_by_backend": {
+              "b1": 64000,
+              "b2": 59500,
+              "b3": 45500,
+              "b4": 50000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_directory": "bench/results/20261124-173858-capacity-C-rr",
+      "summary_sha256": "c2494748bc522edaf6af225b50501502c42cc0135630dc6a37ee53575870b4af",
+      "summary": "capacity: scenario C, loop, picker rr, backends 4, 속도마다 150.0s (워밍업 60.0s 제외), 도착 끝난 뒤 진행 중 요청까지 기다림\n rate  sent  done/s  short ttft p50      p99  all ttft p99  total p99  5xx/err\n  0.3    33    0.33            3818     9733          9733      21151        0\n  0.5    50    0.40           13173    38932         38932      53346        0\n  0.8    60    0.33           63503    88532         88532     106793        0\n  1.2    95    0.31          135346   212034        212034     220807        0\n"
+    },
+    {
+      "source_directory": "bench/results/20261124-175447-capacity-C-hash",
+      "summary_sha256": "37f946e86ae7070729ded8387f923e6e21c2e0dea46487e2cf49bfd367251b21",
+      "summary": "capacity: scenario C, loop, picker hash, backends 4, 속도마다 150.0s (워밍업 60.0s 제외), 도착 끝난 뒤 진행 중 요청까지 기다림\n rate  sent  done/s  short ttft p50      p99  all ttft p99  total p99  5xx/err\n  0.3    33    0.31            1846    22433         22433      34323        0\n  0.5    50    0.38            6402    40188         40188      52811        0\n  0.8    60    0.37           26212    97500         97500     111020        0\n  1.2    95    0.39           78941   159928        159928     166542        0\n"
+    },
+    {
+      "source_directory": "bench/results/20261124-192259-capacity-C-bounded125",
+      "summary_sha256": "81d06f9b72a035109e7c06d5ee1910ac782b7887b3e3e5d96d7a0514345776fe",
+      "summary": "capacity: scenario C, loop, picker bounded:125, backends 4, 속도마다 150.0s (워밍업 60.0s 제외), 도착 끝난 뒤 진행 중 요청까지 기다림\n rate  sent  done/s  short ttft p50      p99  all ttft p99  total p99  5xx/err\n  0.3    33    0.34            3801    16268         16268      23416        0\n  0.5    50    0.44           11703    34976         34976      50815        0\n  0.8    60    0.36           34969    75550         75550      98197        0\n  1.2    95    0.44           73720   126635        126635     138530        0\n"
+    }
+  ]
+}
