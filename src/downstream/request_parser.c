@@ -138,6 +138,13 @@ static int parse_target(str_t target, http_request_t *req, target_form_t *out_fo
 {
     str_t rest = target;
 
+    /* request-target에는 제어 문자·공백·DEL이 올 수 없다 (RFC 9112 §3.2, robust R-04) */
+    for (size_t i = 0; i < target.len; i++) {
+        unsigned char ch = (unsigned char)target.ptr[i];
+        if (ch <= 0x20 || ch == 0x7f) {
+            return 400;
+        }
+    }
     if (target.ptr[0] == '/') {
         *out_form = TARGET_ORIGIN;
     } else if (target.len >= 7 && str_eq_ci((str_t){target.ptr, 7}, "http://")) {
@@ -153,8 +160,15 @@ static int parse_target(str_t target, http_request_t *req, target_form_t *out_fo
     if (uri_split(rest, &req->raw_path, &req->query) != 0) {
         return 400;
     }
-    if (req->raw_path.len == 0 && *out_form == TARGET_ABSOLUTE) {
-        req->raw_path = str_from_cstr("/");
+    if (*out_form == TARGET_ABSOLUTE && (req->raw_path.len == 0 || req->raw_path.ptr < target.ptr ||
+                                         req->raw_path.ptr >= target.ptr + target.len)) {
+        /* 경로 없는 absolute-form: raw_path는 수신 버퍼 안의 빈 값으로 두고(types.h 계약),
+         * path만 "/"로 한다. request_writer는 빈 경로를 "/"로 보낸다 */
+        req->raw_path = (str_t){req->host.ptr + req->host.len, 0};
+        if (uri_decode_path(str_from_cstr("/"), req->path, sizeof(req->path), NULL) != 0) {
+            return 400;
+        }
+        return 0;
     }
     if (uri_decode_path(req->raw_path, req->path, sizeof(req->path), NULL) != 0 ||
         path_normalize(req->path) != 0) {

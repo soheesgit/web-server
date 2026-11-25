@@ -22,11 +22,12 @@
  *     그 밖의 유효한 토큰("PUT", "DELETE", "get", "CONNECT")은 501. method_raw에 원본.
  *  4. 버전: "HTTP/1.0"·"HTTP/1.1"만 허용(minor 0·1). "HTTP/<숫자>.<숫자>"이지만 1.0·1.1이 아니면
  *     505 ("HTTP/2.0", "HTTP/1.2"). 그 밖의 형식("HTTP/1", "HTTP/1.x", "HTTX/1.1")은 400.
- *  5. 대상 길이가 lim->max_uri를 넘으면 414.
+ *  5. 대상 길이가 lim->max_uri를 넘으면 414. 대상에 제어 문자(0x00~0x20, 0x7F)가 있으면 400.
  *  6. 대상 형식: '/'로 시작하면 origin-form. "http://"로 시작하면(스킴 대소문자 무시)
  *     absolute-form: uri_parse_absolute로 authority와 나머지를 나눠 host = authority.
  *     "*"(asterisk-form)과 authority-form("a.com:443")은 501. 그 밖은 400.
  *  7. 경로: uri_split → raw_path·query. uri_decode_path(raw_path) → path_normalize → path.
+ *     경로 없는 absolute-form은 raw_path가 버퍼 안의 빈 값(길이 0), path는 "/".
  *     디코딩 실패(잘못된 %XX, %00, 길이 초과)는 400, 루트 위 이탈은 400 (D-001). %2F는 '/'로
  *     디코딩한 뒤 정규화한다 (D-002).
  *  8. 헤더: 요청 라인 다음부터 빈 줄 직전까지 http_parse_headers(lim->max_headers). 400·431.
