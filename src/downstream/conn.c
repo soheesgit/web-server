@@ -589,6 +589,15 @@ static int setup_proxy_job(conn_t *c, const http_request_t *req, const route_t *
     if (sid != NULL) {
         c->job.affinity_key = sid->value;
     }
+    if (rt->kind == ROUTE_FORWARD) {
+        /* 포워드(D-046): 목적지는 URI의 authority 하나라 다른 백엔드로 재시도하지 않는다 */
+        c->job.backend = upstream_forward_backend(rt->upstream, req->host);
+        c->job.max_attempts = 1;
+        if (c->job.backend == NULL) {
+            (void)plan_error(&c->plan, 502);
+            return -1;
+        }
+    }
     if (req->body.len > SIZE_MAX - req->head_len - 1024 ||
         buf_init(&c->job.request, 0, req->head_len + req->body.len + 1024) != 0) {
         (void)plan_error(&c->plan, 500);
@@ -926,6 +935,14 @@ static int forward_allowed(const conn_t *c, const http_request_t *req, const rou
 static const route_t *resolve_route(conn_t *c, const http_request_t *req, route_t *forward)
 {
     const route_t *rt = router_match(c->env->router, req->host, req->path);
+    if (rt != NULL && rt->kind == ROUTE_FORWARD) {
+        /* 포워드 route(D-046)는 목적지가 URI에 적힌 absolute-form만 받는다 */
+        if (req->target.ptr[0] == '/') {
+            (void)plan_error(&c->plan, 400);
+            return NULL;
+        }
+        return rt;
+    }
     if (req->target.ptr[0] != '/') {
         int status = forward_allowed(c, req, rt);
         if (status != 0) {
@@ -968,7 +985,7 @@ static void build_plan(conn_t *c, const http_request_t *req, size_t *out_cgi_bod
     if (rt == NULL) {
         return;
     }
-    if (rt->kind == ROUTE_PROXY) {
+    if (rt->kind == ROUTE_PROXY || rt->kind == ROUTE_FORWARD) {
         proxy_run(c, req, rt);
     } else {
         dispatch_local(c, req, rt, platform_now_ms());
@@ -1215,7 +1232,7 @@ static void nb_dispatch_request(conn_t *c, int64_t now)
         nb_error(c, 500, false, now); /* D-025 */
         return;
     }
-    if (rt->kind == ROUTE_PROXY) {
+    if (rt->kind == ROUTE_PROXY || rt->kind == ROUTE_FORWARD) {
         s->route = *rt;
         if (setup_proxy_job(c, &s->req, &s->route) == 0) {
             s->phase = NB_RELAY_HEAD;

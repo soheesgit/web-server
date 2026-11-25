@@ -12,6 +12,7 @@
 
 #include "core/buf.h"
 #include "core/config.h"
+#include "core/str.h"
 
 /**
  * 백엔드 하나 (불투명): 해석된 주소, 연속 실패 횟수, 제외 만료 시각, 유휴 연결 목록.
@@ -181,6 +182,26 @@ backend_t *upstream_pick(upstream_group_t *g, const backend_t *exclude, int64_t 
  */
 backend_t *upstream_pick_key(upstream_group_t *g, const char *key, size_t key_len,
                              const backend_t *exclude, int64_t now_ms);
+
+/**
+ * 포워드 프록시 목적지의 백엔드를 돌려준다 (D-046 제안).
+ *
+ * authority는 "host[:port]"(포트가 없으면 80). 같은 "host:port"를 전에 만들었으면 그 백엔드를
+ * 돌려줘 유휴 연결 풀을 함께 쓴다. 처음 보는 목적지면 이름을 해석해 그룹에 더한다. 그룹의
+ * 목적지는 최대 CFG_MAX_BACKENDS개. IPv6 리터럴("[::1]")은 받지 않는다.
+ *
+ * @param g          upstream_lookup_cb(reg, CFG_FORWARD_UPSTREAM)이 돌려준 포워드 그룹. NULL 불가
+ * @param authority  absolute-form URI의 authority (http_request_t.host)
+ * @return           백엔드 (레지스트리 수명), NULL 실패
+ *
+ * 에러:    EINVAL (형식·이름 해석 실패), E2BIG (목적지 수 상한)
+ * 소유권:  레지스트리가 소유 (해제 금지)
+ * 스레드:  [thread-safe]
+ * I/O:     이름 해석 (getaddrinfo)
+ * 블로킹:  처음 보는 목적지의 이름 해석
+ * 테스트:  E-FW-01
+ */
+backend_t *upstream_forward_backend(upstream_group_t *g, str_t authority);
 
 /**
  * 그룹의 백엔드 수를 돌려준다.

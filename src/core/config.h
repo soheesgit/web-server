@@ -31,7 +31,8 @@
  *              / knob WS uint
  *              / ( "access_log" / "error_log" ) WS path
  *   route      = "route" WS prefix WS ( ( "static" / "cgi" ) WS path
- *                                     / "proxy" WS name [ WS "strip" ] [ WS "keep_host" ] )
+ *                                     / "proxy" WS name [ WS "strip" ] [ WS "keep_host" ]
+ *                                     / "forward" )   ; 포워드 프록시 (D-046 제안)
  *   listen-addr= port / host ":" port
  *   hostport   = host ":" port          ; host는 IPv4 주소 또는 이름 (시작 시 1회 해석)
  *   port       = 1~65535 10진수
@@ -83,8 +84,12 @@
 typedef enum {
     ROUTE_STATIC, /* 디스크의 정적 파일 */
     ROUTE_CGI,    /* CGI 스크립트 실행 */
-    ROUTE_PROXY   /* upstream 그룹으로 전달 */
+    ROUTE_PROXY,  /* upstream 그룹으로 전달 */
+    ROUTE_FORWARD /* 포워드 프록시: absolute-form URI의 호스트로 전달 (D-046) */
 } route_kind_t;
+
+/* FORWARD route가 쓰는 upstream 그룹 이름. upstream 이름 규칙에 없는 '@'로 시작해 겹치지 않는다 */
+#define CFG_FORWARD_UPSTREAM "@forward"
 
 /**
  * 설정에서 고른 동시성 엔진. app이 engine_kind_t로 바꾼다.
