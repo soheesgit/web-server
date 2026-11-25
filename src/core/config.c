@@ -247,7 +247,7 @@ static int parse_route(cfg_ctx_t *c, const str_t *tok, size_t n, str_t host)
     route_conf_t *r;
     size_t i = 3;
 
-    if (n < 4) {
+    if (n < 3 || (n < 4 && !str_eq(tok[2], "forward"))) {
         return cfg_fail_at(c, c->line, EINVAL, "route: expected 'route <prefix> <kind> ...'");
     }
     if (c->cfg->n_routes >= CFG_MAX_ROUTES) {
@@ -284,6 +284,10 @@ static int parse_route(cfg_ctx_t *c, const str_t *tok, size_t n, str_t host)
             r->keep_host = true;
             i++;
         }
+    } else if (str_eq(tok[2], "forward")) {
+        r->kind = ROUTE_FORWARD;
+        r->keep_host = true; /* 목적지에는 URI에 적힌 authority를 Host로 보낸다 (D-046) */
+        (void)snprintf(r->upstream, sizeof(r->upstream), "%s", CFG_FORWARD_UPSTREAM);
     } else {
         return cfg_fail_at(c, c->line, EINVAL, "route: unknown kind '%.*s'", pf_len(tok[2]),
                            tok[2].ptr);
@@ -597,7 +601,7 @@ static int validate(cfg_ctx_t *c, const char *file_path)
                 return cfg_fail_at(c, c->route_line[i], EINVAL, "undefined upstream '%s'",
                                    r->upstream);
             }
-        } else if (!is_dir(r->root)) {
+        } else if (r->kind != ROUTE_FORWARD && !is_dir(r->root)) {
             return cfg_fail_at(c, c->route_line[i], errno, "route %s: not a directory: %s",
                                r->prefix, r->root);
         }

@@ -18,17 +18,33 @@ handler_result_t proxy_begin(const http_request_t *req, const route_t *rt, const
     /* AI 라우팅: picker 줄이 있는 그룹은 X-Session-Id를 고정 키로 고른다 (D-045).
      * 그 밖의 그룹과 키 없는 요청은 upstream_pick과 같다 */
     const http_header_t *sid = http_header_get(&req->headers, "X-Session-Id");
-    backend_t *b = upstream_pick_key(rt->upstream, sid != NULL ? sid->value.ptr : NULL,
-                                     sid != NULL ? sid->value.len : 0, NULL, ctx->now_ms);
-    if (b == NULL) {
-        (void)plan_error(out_plan, 503);
-        return HANDLER_DONE;
+    backend_t *b;
+    if (rt->kind == ROUTE_FORWARD) {
+        /* 포워드(D-046)는 목적지가 URI에 적힌 absolute-form 요청만 받는다 */
+        if (req->target.len == 0 || req->target.ptr[0] == '/') {
+            (void)plan_error(out_plan, 400);
+            return HANDLER_DONE;
+        }
+        b = upstream_forward_backend(rt->upstream, req->host);
+        if (b == NULL) {
+            (void)plan_error(out_plan, 502);
+            return HANDLER_DONE;
+        }
+    } else {
+        b = upstream_pick_key(rt->upstream, sid != NULL ? sid->value.ptr : NULL,
+                              sid != NULL ? sid->value.len : 0, NULL, ctx->now_ms);
+        if (b == NULL) {
+            (void)plan_error(out_plan, 503);
+            return HANDLER_DONE;
+        }
     }
     out_job->group = rt->upstream;
     out_job->backend = b;
     out_job->method = req->method;
     out_job->attempts = 1;
-    out_job->max_attempts = (int)upstream_backend_count(rt->upstream);
+    /* 포워드는 목적지가 하나라 다른 백엔드로 재시도하지 않는다 */
+    out_job->max_attempts =
+        rt->kind == ROUTE_FORWARD ? 1 : (int)upstream_backend_count(rt->upstream);
     out_job->client_minor = req->minor;
     out_job->client_keep_alive = req->keep_alive;
     if (sid != NULL) {

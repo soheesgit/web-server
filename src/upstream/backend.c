@@ -151,16 +151,22 @@ upstream_registry_t *upstream_registry_new(const config_t *cfg, char *err, size_
     reg->wake[0] = -1;
     reg->wake[1] = -1;
     reg->metrics = getenv("HTTPD_PROXY_METRICS") != NULL;
-    if (cfg->n_upstreams == 0) {
+    bool forward = false; /* FORWARD route가 있으면 목적지 그룹을 하나 더 둔다 (D-046) */
+    for (size_t i = 0; i < cfg->n_routes; i++) {
+        forward = forward || cfg->routes[i].kind == ROUTE_FORWARD;
+    }
+    if (cfg->n_upstreams == 0 && !forward) {
         return reg;
     }
-    reg->groups = calloc(cfg->n_upstreams, sizeof(*reg->groups));
+    reg->groups = calloc(cfg->n_upstreams + (forward ? 1 : 0), sizeof(*reg->groups));
     if (reg->groups == NULL) {
         goto system_error;
     }
-    for (size_t i = 0; i < cfg->n_upstreams; i++) {
+    for (size_t i = 0; i < cfg->n_upstreams + (forward ? 1 : 0); i++) {
         upstream_group_t *g = &reg->groups[i];
-        const upstream_conf_t *conf = &cfg->upstreams[i];
+        /* 포워드 그룹은 백엔드 없이 시작하고 upstream_forward_backend가 채운다 */
+        static const upstream_conf_t forward_conf = {.name = CFG_FORWARD_UPSTREAM};
+        const upstream_conf_t *conf = i < cfg->n_upstreams ? &cfg->upstreams[i] : &forward_conf;
         int error = pthread_mutex_init(&g->lock, NULL);
         if (error != 0) {
             errno = error;
@@ -253,6 +259,62 @@ upstream_group_t *upstream_registry_get(upstream_registry_t *reg, const char *na
 upstream_group_t *upstream_lookup_cb(void *ctx, const char *name)
 {
     return upstream_registry_get(ctx, name);
+}
+
+backend_t *upstream_forward_backend(upstream_group_t *g, str_t authority)
+{
+    backend_conf_t dest = {.port = 80};
+    const char *colon = memchr(authority.ptr, ':', authority.len);
+    size_t host_len = colon != NULL ? (size_t)(colon - authority.ptr) : authority.len;
+    uint64_t port = 80;
+    backend_t fresh = {0};
+    backend_t *b = NULL;
+    char err[128];
+
+    if (host_len == 0 || host_len >= sizeof(dest.host) || authority.ptr[0] == '[' ||
+        (colon != NULL &&
+         (str_to_u64((str_t){colon + 1, authority.len - host_len - 1}, 65535, &port) != 0 ||
+          port == 0))) {
+        errno = EINVAL;
+        return NULL;
+    }
+    memcpy(dest.host, authority.ptr, host_len);
+    dest.port = (uint16_t)port;
+    /* 같은 목적지는 같은 백엔드를 돌려줘 유휴 연결 풀을 함께 쓴다 */
+    char key[sizeof(fresh.hostport)];
+    (void)snprintf(key, sizeof(key), "%s:%u", dest.host, (unsigned)dest.port);
+    pthread_mutex_lock(&g->lock);
+    for (size_t i = 0; i < g->count && b == NULL; i++) {
+        if (strcmp(g->backends[i].hostport, key) == 0) {
+            b = &g->backends[i];
+        }
+    }
+    pthread_mutex_unlock(&g->lock);
+    if (b != NULL) {
+        return b;
+    }
+    /* 이름 해석은 lock 밖에서 한다. 그 사이 같은 목적지가 추가됐으면 그것을 쓴다 */
+    if (resolve_backend(&fresh, g, &dest, err, sizeof(err)) != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+    (void)snprintf(fresh.hostport, sizeof(fresh.hostport), "%s", key);
+    pthread_mutex_lock(&g->lock);
+    for (size_t i = 0; i < g->count && b == NULL; i++) {
+        if (strcmp(g->backends[i].hostport, key) == 0) {
+            b = &g->backends[i];
+        }
+    }
+    if (b == NULL && g->count < CFG_MAX_BACKENDS) {
+        b = &g->backends[g->count];
+        *b = fresh;
+        g->count++;
+    }
+    pthread_mutex_unlock(&g->lock);
+    if (b == NULL) {
+        errno = E2BIG;
+    }
+    return b;
 }
 
 size_t upstream_backend_count(const upstream_group_t *g)

@@ -55,14 +55,18 @@ relay_t *relay_start(proxy_job_t *job, const http_limits_t *lim, int64_t now_ms,
     bool deferred = job->request.len == 0;
     backend_t *selected = NULL;
     backend_t *pinned = deferred ? NULL : job->backend;
-    /* AI 라우팅(D-045): picker 그룹의 첫 시도는 고정 키로 고른다. 재시도는 정책 그대로 */
-    if (deferred && job->backend == NULL && job->affinity_key.len > 0 &&
-        job->group->picker != CFG_PICK_RR) {
+    const backend_t *exclude = deferred ? job->backend : NULL;
+    if (deferred && job->attempts == 1 && job->backend != NULL) {
+        /* 포워드(D-046): 목적지가 첫 시도 전에 정해져 있다 */
+        pinned = job->backend;
+        exclude = NULL;
+    } else if (deferred && job->backend == NULL && job->affinity_key.len > 0 &&
+               job->group->picker != CFG_PICK_RR) {
+        /* AI 라우팅(D-045): picker 그룹의 첫 시도는 고정 키로 고른다. 재시도는 정책 그대로 */
         pinned = upstream_pick_key(job->group, job->affinity_key.ptr, job->affinity_key.len, NULL,
                                    now_ms);
     }
-    if (upstream_checkout(job->group, pinned, deferred ? job->backend : NULL, &selected,
-                          &r->conn) != 0) {
+    if (upstream_checkout(job->group, pinned, exclude, &selected, &r->conn) != 0) {
         r->phase = FAILED;
         r->why = PFAIL_CONNECT;
     } else {
