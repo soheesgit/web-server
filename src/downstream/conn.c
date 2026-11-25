@@ -765,7 +765,9 @@ static int upstream_send_body(conn_t *c, uint64_t *sent)
             size_t used = 0;
             result = http_body_track(t, data, buffered, &used);
             if (result == BODY_DONE && used != buffered) {
-                result = BODY_ERROR;
+                /* 본문 뒤에 남은 바이트(HEAD 응답의 본문 포함)는 버리고 업스트림 연결만 닫는다.
+                 * 클라이언트 응답은 이미 완전하므로 클라이언트 연결은 유지한다 */
+                c->up_reusable = false;
             }
             if (result != BODY_ERROR && send_all(c, data, used) != 0) {
                 canceled = true;
@@ -1471,9 +1473,12 @@ static nb_step_t nb_upstream_body(conn_t *c, int64_t now)
     } else {
         size_t used = 0;
         result = http_body_track(t, bytes, (size_t)n, &used);
-        if (used != (size_t)n) {
+        if (result == BODY_DONE && used != (size_t)n) {
+            c->up_reusable = false; /* 본문 뒤 남은 바이트: 업스트림 연결만 버린다 (v1과 같다) */
+        } else if (used != (size_t)n) {
             result = BODY_ERROR;
-        } else if (send_body_piece(c, bytes, used, false) != 0) {
+        }
+        if (result != BODY_ERROR && send_body_piece(c, bytes, used, false) != 0) {
             local_error = true;
             result = BODY_ERROR;
         }
